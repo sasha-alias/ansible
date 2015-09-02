@@ -1,0 +1,16 @@
+Ansible
+=======
+
+This is a version of Ansible maintained by 2ndQuadrant for internal use.
+
+If you do not work at 2ndQuadrant, please use Ansible from the official
+repository at https://github.com/ansible/ansible
+
+Otherwise, the default master branch is the code you should use. It
+tracks the upstream devel (currently 2.0) branch, but also includes
+various local changes.
+
+See ANSIBLE.md for the contents of the upstream README.md
+
+--
+Abhijit Menon-Sen <ams@2ndQuadrant.com>
