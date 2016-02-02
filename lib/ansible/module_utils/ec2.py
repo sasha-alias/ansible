@@ -29,6 +29,7 @@ import os
 
 try:
     import boto3
+    import botocore
     HAS_BOTO3 = True
 except:
     HAS_BOTO3 = False
@@ -138,10 +139,16 @@ def get_aws_connection_info(module, boto3=False):
         elif 'EC2_REGION' in os.environ:
             region = os.environ['EC2_REGION']
         else:
-            # boto.config.get returns None if config not found
-            region = boto.config.get('Boto', 'aws_region')
-            if not region:
-                region = boto.config.get('Boto', 'ec2_region')
+            if not boto3:
+                # boto.config.get returns None if config not found
+                region = boto.config.get('Boto', 'aws_region')
+                if not region:
+                    region = boto.config.get('Boto', 'ec2_region')
+            elif HAS_BOTO3:
+                # here we don't need to make an additional call, will default to 'us-east-1' if the below evaluates to None.
+                region = botocore.session.get_session().get_config_variable('region')
+            else:
+                module.fail_json("Boto3 is required for this module. Please install boto3 and try again")
 
     if not security_token:
         if 'AWS_SECURITY_TOKEN' in os.environ:
@@ -156,8 +163,7 @@ def get_aws_connection_info(module, boto3=False):
         boto_params = dict(aws_access_key_id=access_key,
                            aws_secret_access_key=secret_key,
                            aws_session_token=security_token)
-        if validate_certs:
-            boto_params['verify'] = validate_certs
+        boto_params['verify'] = validate_certs
 
         if profile_name:
             boto_params['profile_name'] = profile_name
@@ -174,7 +180,7 @@ def get_aws_connection_info(module, boto3=False):
                 module.fail_json("boto does not support profile_name before 2.24")
             boto_params['profile_name'] = profile_name
 
-        if validate_certs and HAS_LOOSE_VERSION and LooseVersion(boto.Version) >= LooseVersion("2.6.0"):
+        if HAS_LOOSE_VERSION and LooseVersion(boto.Version) >= LooseVersion("2.6.0"):
             boto_params['validate_certs'] = validate_certs
 
     for param, value in boto_params.items():

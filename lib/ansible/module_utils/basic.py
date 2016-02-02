@@ -928,7 +928,7 @@ class AnsibleModule(object):
     def _symbolic_mode_to_octal(self, path_stat, symbolic_mode):
         new_mode = stat.S_IMODE(path_stat.st_mode)
 
-        mode_re = re.compile(r'^(?P<users>[ugoa]+)(?P<operator>[-+=])(?P<perms>[rwxXst]*|[ugo])$')
+        mode_re = re.compile(r'^(?P<users>[ugoa]+)(?P<operator>[-+=])(?P<perms>[rwxXst-]*|[ugo])$')
         for mode in symbolic_mode.split(','):
             match = mode_re.match(mode)
             if match:
@@ -1149,6 +1149,10 @@ class AnsibleModule(object):
 
             elif check_invalid_arguments and k not in self._legal_inputs:
                 self.fail_json(msg="unsupported parameter for module: %s" % k)
+
+            #clean up internal params:
+            if k.startswith('_ansible_'):
+                del self.params[k]
 
     def _count_terms(self, check):
         count = 0
@@ -1788,7 +1792,9 @@ class AnsibleModule(object):
         elif isinstance(args, basestring) and use_unsafe_shell:
             shell = True
         elif isinstance(args, basestring):
-            args = shlex.split(args.encode('utf-8'))
+            if isinstance(args, unicode):
+                args = args.encode('utf-8')
+            args = shlex.split(args)
         else:
             msg = "Argument 'args' to run_command must be list or string"
             self.fail_json(rc=257, cmd=args, msg=msg)

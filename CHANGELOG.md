@@ -3,7 +3,13 @@ Ansible Changes By Release
 
 ## 2.1 TBD - ACTIVE DEVELOPMENT
 
+###Major Changes:
+
+* added facility for modules to send back 'diff' for display when ansible is called with --diff, file, puppet and other module already implement this
+
 ####New Modules:
+* aws: ec2_vol_facts
+* aws: ec2_vpc_dhcp_options.py
 * aws: ec2_vpc_net_facts
 * cloudstack: cs_volume
 
@@ -35,6 +41,7 @@ Ansible Changes By Release
   This re-executes inventory scripts, but does not force them to ignore any cache they might use.
 * New delegate_facts directive, a boolean that allows you to apply facts to the delegated host (true/yes) instead of the inventory_hostname (no/false) which is the default and previous behaviour.
 * local connections now work with 'su' as a privilege escalation method
+* Ansible 2.0 has deprecated the “ssh” from ansible_ssh_user, ansible_ssh_host, and ansible_ssh_port to become ansible_user, ansible_host, and ansible_port.
 * New ssh configuration variables(`ansible_ssh_common_args`, `ansible_ssh_extra_args`) can be used to configure a
   per-group or per-host ssh ProxyCommand or set any other ssh options.
   `ansible_ssh_extra_args` is used to set options that are accepted only by ssh (not sftp or scp, which have their own analogous settings).
