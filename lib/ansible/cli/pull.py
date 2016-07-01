@@ -91,6 +91,14 @@ class PullCLI(CLI):
         self.parser.add_option('--verify-commit', dest='verify', default=False, action='store_true',
             help='verify GPG signature of checked out commit, if it fails abort running the playbook.'
                  ' This needs the corresponding VCS module to support such an operation')
+        self.parser.add_option('--clean', dest='clean', default=False, action='store_true',
+            help='modified files in the working repository will be discarded')
+        self.parser.add_option('--track-subs', dest='tracksubs', default=False, action='store_true',
+            help='submodules will track the latest changes'
+                 ' This is equivalent to specifying the --remote flag to git submodule update')
+
+        # for pull we don't wan't a default
+        self.parser.set_defaults(inventory=None)
 
         self.options, self.args = self.parser.parse_args(self.args[1:])
 
@@ -136,8 +144,8 @@ class PullCLI(CLI):
             base_opts += ' -%s' % ''.join([ "v" for x in range(0, self.options.verbosity) ])
 
         # Attempt to use the inventory passed in as an argument
-        # It might not yet have been downloaded so use localhost if note
-        if not self.options.inventory or not os.path.exists(self.options.inventory):
+        # It might not yet have been downloaded so use localhost as default
+        if not self.options.inventory or ( ',' not in self.options.inventory and not os.path.exists(self.options.inventory)):
             inv_opts = 'localhost,'
         else:
             inv_opts = self.options.inventory
@@ -157,6 +165,12 @@ class PullCLI(CLI):
             if self.options.verify:
                 repo_opts += ' verify_commit=yes'
 
+            if self.options.clean:
+                repo_opts += ' force=yes'
+
+            if self.options.tracksubs:
+                repo_opts += ' track_submodules=yes'
+
             if not self.options.fullclone:
                 repo_opts += ' depth=1'
 
@@ -166,7 +180,7 @@ class PullCLI(CLI):
 
         bin_path = os.path.dirname(os.path.abspath(sys.argv[0]))
         # hardcode local and inventory/host as this is just meant to fetch the repo
-        cmd = '%s/ansible -i "localhost," -c local %s -m %s -a "%s" all' % (bin_path, base_opts, self.options.module_name, repo_opts)
+        cmd = '%s/ansible -i "%s" %s -m %s -a "%s" all -l "%s"' % (bin_path, inv_opts, base_opts, self.options.module_name, repo_opts, limit_opts)
 
         for ev in self.options.extra_vars:
             cmd += ' -e "%s"' % ev
@@ -204,10 +218,14 @@ class PullCLI(CLI):
             cmd += ' -e "%s"' % ev
         if self.options.ask_sudo_pass or self.options.ask_su_pass or self.options.become_ask_pass:
             cmd += ' --ask-become-pass'
+        if self.options.skip_tags:
+            cmd += ' --skip-tags "%s"' % self.options.skip_tags
         if self.options.tags:
             cmd += ' -t "%s"' % self.options.tags
         if self.options.subset:
             cmd += ' -l "%s"' % self.options.subset
+        else:
+            cmd += ' -l "%s"' % limit_opts
 
         os.chdir(self.options.dest)
 

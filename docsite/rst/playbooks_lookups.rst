@@ -25,6 +25,7 @@ The file lookup is the most basic lookup type.
 
 Contents can be read off the filesystem as follows::
 
+    ---
     - hosts: all
       vars:
          contents: "{{ lookup('file', '/etc/foo.txt') }}"
@@ -48,7 +49,7 @@ a file at a given filepath.
 (Docs about crypted save modes are pending)
  
 If the file exists previously, it will retrieve its contents, behaving just like with_file. Usage of variables like "{{ inventory_hostname }}" in the filepath can be used to set
-up random passwords per host (what simplifies password management in 'host_vars' variables).
+up random passwords per host (which simplifies password management in 'host_vars' variables).
 
 Generated passwords contain a random mix of upper and lowercase ASCII letters, the
 numbers 0-9 and punctuation (". , : - _"). The default length of a generated password is 20 characters.
@@ -134,9 +135,10 @@ appears exactly once in column 0 (the first column, 0-indexed) of the table. All
 Field        Default        Description
 ----------   ------------   -----------------------------------------------------------------------------------------
 file         ansible.csv    Name of the file to load
-delimiter    TAB            Delimiter used by CSV file. As a special case, tab can be specified as either TAB or \t.
 col          1              The column to output, indexed by 0
-default      empty string   return value if the key is not in the csv file
+delimiter    TAB            Delimiter used by CSV file. As a special case, tab can be specified as either TAB or \t.
+default      empty string   Default return value if the key is not in the csv file
+encoding     utf-8          Encoding (character set) of the used CSV file (added in version 2.1)
 ==========   ============   =========================================================================================
 
 .. note:: The default delimiter is TAB, *not* comma.

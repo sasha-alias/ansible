@@ -20,9 +20,7 @@ __metaclass__ = type
 import base64
 import os
 import re
-import random
 import shlex
-import time
 
 from ansible.utils.unicode import to_bytes, to_unicode
 
@@ -36,6 +34,13 @@ if _powershell_version:
 
 class ShellModule(object):
 
+    # Common shell filenames that this plugin handles
+    # Powershell is handled differently.  It's selected when winrm is the
+    # connection
+    COMPATIBLE_SHELLS = frozenset()
+    # Family of shells this has.  Must match the filename without extension
+    SHELL_FAMILY = 'powershell'
+
     def env_prefix(self, **kwargs):
         return ''
 
@@ -47,12 +52,14 @@ class ShellModule(object):
         path = '\\'.join(parts)
         if path.startswith('~'):
             return path
-        return '"%s"' % path
+        return '\'%s\'' % path
 
-    # powershell requires that script files end with .ps1
-    def get_remote_filename(self, base_name):
-        if not base_name.strip().lower().endswith('.ps1'):
-            return base_name.strip() + '.ps1'
+    def get_remote_filename(self, pathname):
+        # powershell requires that script files end with .ps1
+        base_name = os.path.basename(pathname.strip())
+        name, ext = os.path.splitext(base_name.strip())
+        if ext.lower() not in ['.ps1', '.exe']:
+            return name + '.ps1'
 
         return base_name.strip()
 
@@ -61,8 +68,14 @@ class ShellModule(object):
         path = self._unquote(path)
         return path.endswith('/') or path.endswith('\\')
 
-    def chmod(self, mode, path):
-        return ''
+    def chmod(self, mode, path, recursive=True):
+        raise NotImplementedError('chmod is not implemented for Powershell')
+
+    def chown(self, path, user, group=None, recursive=True):
+        raise NotImplementedError('chown is not implemented for Powershell')
+
+    def set_user_facl(self, path, user, mode, recursive=True):
+        raise NotImplementedError('set_user_facl is not implemented for Powershell')
 
     def remove(self, path, recurse=False):
         path = self._escape(self._unquote(path))
@@ -87,6 +100,22 @@ class ShellModule(object):
             script = 'Write-Host ((Get-Location).Path + "%s")' % self._escape(user_home_path[1:])
         else:
             script = 'Write-Host "%s"' % self._escape(user_home_path)
+        return self._encode_script(script)
+
+    def exists(self, path):
+        path = self._escape(self._unquote(path))
+        script = '''
+            If (Test-Path "%s")
+            {
+                $res = 0;
+            }
+            Else
+            {
+                $res = 1;
+            }
+            Write-Host "$res";
+            Exit $res;
+         ''' % path
         return self._encode_script(script)
 
     def checksum(self, path, *args, **kwargs):
@@ -119,6 +148,10 @@ class ShellModule(object):
             cmd_parts.insert(0, '&')
         elif shebang and shebang.startswith('#!'):
             cmd_parts.insert(0, shebang[2:])
+        elif not shebang:
+            # The module is assumed to be a binary
+            cmd_parts[0] = self._unquote(cmd_parts[0])
+            cmd_parts.append(arg_path)
         script = '''
             Try
             {

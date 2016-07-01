@@ -88,7 +88,7 @@ and is guaranteed to entertain and/or annoy coworkers.
 Configuring
 +++++++++++
 
-To activate a callback drop it in a callback directory as configured in :ref:`ansible.cfg <callback_plugins>`.
+To activate a callback drop it in a callback directory as configured in :ref:`ansible.cfg <callback_plugins>`. Plugin load order is alphanumeric in nature. If you have a plugin you want to run first consider naming it `1_first.py`, or if you have a plugin you want to run last consider naming it `z_last.py`. 
 
 .. _callback_development:
 
@@ -106,16 +106,22 @@ Distributing Plugins
 Plugins are loaded from both Python's site_packages (those that ship with ansible) and a configured plugins directory, which defaults
 to /usr/share/ansible/plugins, in a subfolder for each plugin type::
 
-    * action_plugins
-    * lookup_plugins
-    * callback_plugins
-    * connection_plugins
-    * filter_plugins
-    * vars_plugins
+    * action
+    * lookup
+    * callback
+    * connection
+    * filter
+    * strategy
+    * cache
+    * test
+    * shell
 
 To change this path, edit the ansible configuration file.
 
 In addition, plugins can be shipped in a subdirectory relative to a top-level playbook, in folders named the same as indicated above.
+
+They can also be shipped as part of a role, in a subdirectory named as indicated above. The plugin will be availiable as soon as the role
+is called.
 
 .. seealso::
 

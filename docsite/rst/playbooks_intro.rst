@@ -41,7 +41,7 @@ Each playbook is composed of one or more 'plays' in a list.
 
 The goal of a play is to map a group of hosts to some well defined roles, represented by
 things ansible calls tasks.  At a basic level, a task is nothing more than a call
-to an ansible module (see :doc:`Modules`).
+to an ansible module (see :doc:`modules`).
 
 By composing a playbook of multiple 'plays', it is possible to
 orchestrate multi-machine deployments, running certain steps on all
@@ -126,7 +126,7 @@ the web servers, and then the database servers. For example::
       - name: ensure postgresql is at the latest version
         yum: name=postgresql state=latest
       - name: ensure that postgresql is started
-        service: name=postgresql state=running
+        service: name=postgresql state=started
 
 You can use this method to switch between the host group you're targeting,
 the username logging into the remote servers, whether to sudo or not, and so
@@ -180,9 +180,9 @@ Support for running things as another user is also available (see :doc:`become`)
     ---
     - hosts: webservers
       remote_user: yourname
-      sudo: yes
+      become: yes
 
-You can also use sudo on a particular task instead of the whole play::
+You can also use become on a particular task instead of the whole play::
 
     ---
     - hosts: webservers
@@ -274,7 +274,7 @@ the service module takes ``key=value`` arguments::
 
    tasks:
      - name: make sure apache is running
-       service: name=httpd state=running
+       service: name=httpd state=started
 
 The **command** and **shell** modules are the only modules that just take a list
 of arguments and don't use the ``key=value`` form.  This makes
@@ -378,15 +378,31 @@ Here's an example handlers section::
         - name: restart apache
           service: name=apache state=restarted
 
-Handlers are best used to restart services and trigger reboots.  You probably
-won't need them for much else.
+As of Ansible 2.2, handlers can also "listen" to generic topics, and tasks can notify those topics as follows::
+
+    handlers:
+        - name: restart memcached
+          service: name=memcached state=restarted
+          listen: "restart web services"
+        - name: restart apache
+          service: name=apache state=restarted
+          listen: "restart web services"
+
+    tasks:
+        - name: restart everything
+          command: echo "this task will restart the web services"
+          notify: "restart web services"
+
+This use makes it much easier to trigger multiple handlers. It also decouples handlers from their names,
+making it easier to share handlers among playbooks and roles (especially when using 3rd party roles from
+a shared source like Galaxy).
 
 .. note::
-   * Notify handlers are always run in the order written.
-   * Handler names live in a global namespace.
+   * Notify handlers are always run in the same order they are defined, `not` in the order listed in the notify-statement. This is also the case for handlers using `listen`.
+   * Handler names and `listen` topics live in a global namespace.
    * If two handler tasks have the same name, only one will run.
      `* <https://github.com/ansible/ansible/issues/4943>`_
-   * You cannot notify a handler that is defined inside of an include
+   * You cannot notify a handler that is defined inside of an include. As of Ansible 2.1, this does work, however the include must be `static`.
 
 Roles are described later on, but it's worthwhile to point out that:
 

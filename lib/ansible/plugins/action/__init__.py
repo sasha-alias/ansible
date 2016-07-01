@@ -35,6 +35,7 @@ from ansible.compat.six import binary_type, text_type, iteritems, with_metaclass
 from ansible import constants as C
 from ansible.errors import AnsibleError, AnsibleConnectionFailure
 from ansible.executor.module_common import modify_module
+from ansible.release import __version__
 from ansible.parsing.utils.jsonify import jsonify
 from ansible.utils.unicode import to_bytes, to_unicode
 
@@ -64,6 +65,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         # Backwards compat: self._display isn't really needed, just import the global display and use that.
         self._display           = display
 
+        self._cleanup_remote_tmp  = False
         self._supports_check_mode = True
 
     @abstractmethod
@@ -91,6 +93,13 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 module_args = self._task.args,
             )
         return results
+
+    def _remote_file_exists(self, path):
+        cmd = self._connection._shell.exists(path)
+        result = self._low_level_execute_command(cmd=cmd, sudoable=True)
+        if result['rc'] == 0:
+            return True
+        return False
 
     def _configure_module(self, module_name, module_args, task_vars=None):
         '''
@@ -137,9 +146,9 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                                    "run 'git submodule update --init --recursive' to correct this problem." % (module_name))
 
         # insert shared code and arguments into the module
-        (module_data, module_style, module_shebang) = modify_module(module_path, module_args, task_vars=task_vars)
+        (module_data, module_style, module_shebang) = modify_module(module_name, module_path, module_args, task_vars=task_vars, module_compression=self._play_context.module_compression)
 
-        return (module_style, module_shebang, module_data)
+        return (module_style, module_shebang, module_data, module_path)
 
     def _compute_environment_string(self):
         '''
@@ -183,7 +192,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         if tmp and "tmp" in tmp:
             # tmp has already been created
             return False
-        if not self._connection.has_pipelining or not self._play_context.pipelining or C.DEFAULT_KEEP_REMOTE_FILES:
+        if not self._connection.has_pipelining or not self._play_context.pipelining or C.DEFAULT_KEEP_REMOTE_FILES or self._play_context.become_method == 'su':
             # tmp is necessary to store the module source code
             # or we want to keep the files on the target system
             return True
@@ -192,7 +201,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             return True
         return False
 
-    def _make_tmp_path(self):
+    def _make_tmp_path(self, remote_user):
         '''
         Create and return a temporary path on a remote box.
         '''
@@ -200,12 +209,10 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         basefile = 'ansible-tmp-%s-%s' % (time.time(), random.randint(0, 2**48))
         use_system_tmp = False
 
-        if self._play_context.become and self._play_context.become_user != 'root':
+        if self._play_context.become and self._play_context.become_user not in ('root', remote_user):
             use_system_tmp = True
 
-        tmp_mode = None
-        if self._play_context.remote_user != 'root' or self._play_context.become and self._play_context.become_user != 'root':
-            tmp_mode = 0o755
+        tmp_mode = 0o700
 
         cmd = self._connection._shell.mkdtemp(basefile, use_system_tmp, tmp_mode)
         result = self._low_level_execute_command(cmd, sudoable=False)
@@ -234,7 +241,8 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             raise AnsibleConnectionFailure(output)
 
         try:
-            rc = self._connection._shell.join_path(result['stdout'].strip(), u'').splitlines()[-1]
+            stdout_parts = result['stdout'].strip().split('%s=' % basefile, 1)
+            rc = self._connection._shell.join_path(stdout_parts[-1], u'').splitlines()[-1]
         except IndexError:
             # stdout was empty or just space, set to / to trigger error in next if
             rc = '/'
@@ -249,11 +257,15 @@ class ActionBase(with_metaclass(ABCMeta, object)):
     def _remove_tmp_path(self, tmp_path):
         '''Remove a temporary path we created. '''
 
-        if tmp_path and "-tmp-" in tmp_path:
+        if tmp_path and self._cleanup_remote_tmp and not C.DEFAULT_KEEP_REMOTE_FILES and "-tmp-" in tmp_path:
             cmd = self._connection._shell.remove(tmp_path, recurse=True)
             # If we have gotten here we have a working ssh configuration.
             # If ssh breaks we could leave tmp directories out on the remote system.
             self._low_level_execute_command(cmd, sudoable=False)
+
+    def _transfer_file(self, local_path, remote_path):
+        self._connection.put_file(local_path, remote_path)
+        return remote_path
 
     def _transfer_data(self, remote_path, data):
         '''
@@ -264,55 +276,180 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             data = jsonify(data)
 
         afd, afile = tempfile.mkstemp()
-        afo = os.fdopen(afd, 'w')
+        afo = os.fdopen(afd, 'wb')
         try:
             data = to_bytes(data, errors='strict')
             afo.write(data)
         except Exception as e:
-            #raise AnsibleError("failure encoding into utf-8: %s" % str(e))
             raise AnsibleError("failure writing module data to temporary file for transfer: %s" % str(e))
 
         afo.flush()
         afo.close()
 
         try:
-            self._connection.put_file(afile, remote_path)
+            self._transfer_file(afile, remote_path)
         finally:
             os.unlink(afile)
 
         return remote_path
 
-    def _remote_chmod(self, mode, path, sudoable=False):
+    def _fixup_perms(self, remote_path, remote_user, execute=True, recursive=True):
+        """
+        We need the files we upload to be readable (and sometimes executable)
+        by the user being sudo'd to but we want to limit other people's access
+        (because the files could contain passwords or other private
+        information.  We achieve this in one of these ways:
+
+        * If no sudo is performed or the remote_user is sudo'ing to
+          themselves, we don't have to change permissions.
+        * If the remote_user sudo's to a privileged user (for instance, root),
+          we don't have to change permissions
+        * If the remote_user sudo's to an unprivileged user then we attempt to
+          grant the unprivileged user access via file system acls.
+        * If granting file system acls fails we try to change the owner of the
+          file with chown which only works in case the remote_user is
+          privileged or the remote systems allows chown calls by unprivileged
+          users (e.g. HP-UX)
+        * If the chown fails we can set the file to be world readable so that
+          the second unprivileged user can read the file.
+          Since this could allow other users to get access to private
+          information we only do this ansible is configured with
+          "allow_world_readable_tmpfiles" in the ansible.cfg
+        """
+        if self._connection._shell.SHELL_FAMILY == 'powershell':
+            # This won't work on Powershell as-is, so we'll just completely skip until
+            # we have a need for it, at which point we'll have to do something different.
+            return remote_path
+
+        if remote_path is None:
+            # Sometimes code calls us naively -- it has a var which could
+            # contain a path to a tmp dir but doesn't know if it needs to
+            # exist or not.  If there's no path, then there's no need for us
+            # to do work
+            display.debug('_fixup_perms called with remote_path==None.  Sure this is correct?')
+            return remote_path
+
+        if self._play_context.become and self._play_context.become_user not in ('root', remote_user):
+            # Unprivileged user that's different than the ssh user.  Let's get
+            # to work!
+
+            # Try to use file system acls to make the files readable for sudo'd
+            # user
+            if execute:
+                mode = 'rx'
+            else:
+                mode = 'rX'
+
+            res = self._remote_set_user_facl(remote_path, self._play_context.become_user, mode, recursive=recursive, sudoable=False)
+            if res['rc'] != 0:
+                # File system acls failed; let's try to use chown next
+                # Set executable bit first as on some systems an
+                # unprivileged user can use chown
+                if execute:
+                    res = self._remote_chmod('u+x', remote_path, recursive=recursive)
+                    if res['rc'] != 0:
+                        raise AnsibleError('Failed to set file mode on remote temporary files (rc: {0}, err: {1})'.format(res['rc'], res['stderr']))
+
+                res = self._remote_chown(remote_path, self._play_context.become_user, recursive=recursive)
+                if res['rc'] != 0 and remote_user == 'root':
+                    # chown failed even if remove_user is root
+                    raise AnsibleError('Failed to change ownership of the temporary files Ansible needs to create despite connecting as root.  Unprivileged become user would be unable to read the file.')
+                elif res['rc'] != 0:
+                    if C.ALLOW_WORLD_READABLE_TMPFILES:
+                        # chown and fs acls failed -- do things this insecure
+                        # way only if the user opted in in the config file
+                        display.warning('Using world-readable permissions for temporary files Ansible needs to create when becoming an unprivileged user which may be insecure. For information on securing this, see https://docs.ansible.com/ansible/become.html#becoming-an-unprivileged-user')
+                        res = self._remote_chmod('a+%s' % mode, remote_path, recursive=recursive)
+                        if res['rc'] != 0:
+                            raise AnsibleError('Failed to set file mode on remote files (rc: {0}, err: {1})'.format(res['rc'], res['stderr']))
+                    else:
+                        raise AnsibleError('Failed to set permissions on the temporary files Ansible needs to create when becoming an unprivileged user (rc: {0}, err: {1}). For information on working around this, see https://docs.ansible.com/ansible/become.html#becoming-an-unprivileged-user'.format(res['rc'], res['stderr']))
+        elif execute:
+            # Can't depend on the file being transferred with execute
+            # permissions.  Only need user perms because no become was
+            # used here
+            res = self._remote_chmod('u+x', remote_path, recursive=recursive)
+            if res['rc'] != 0:
+                raise AnsibleError('Failed to set file mode on remote files (rc: {0}, err: {1})'.format(res['rc'], res['stderr']))
+
+        return remote_path
+
+    def _remote_chmod(self, mode, path, recursive=True, sudoable=False):
         '''
         Issue a remote chmod command
         '''
-
-        cmd = self._connection._shell.chmod(mode, path)
+        cmd = self._connection._shell.chmod(mode, path, recursive=recursive)
         res = self._low_level_execute_command(cmd, sudoable=sudoable)
         return res
 
-    def _remote_checksum(self, path, all_vars):
+    def _remote_chown(self, path, user, group=None, recursive=True, sudoable=False):
         '''
-        Takes a remote checksum and returns 1 if no file
+        Issue a remote chown command
         '''
+        cmd = self._connection._shell.chown(path, user, group, recursive=recursive)
+        res = self._low_level_execute_command(cmd, sudoable=sudoable)
+        return res
 
-        python_interp = all_vars.get('ansible_python_interpreter', 'python')
+    def _remote_set_user_facl(self, path, user, mode, recursive=True, sudoable=False):
+        '''
+        Issue a remote call to setfacl
+        '''
+        cmd = self._connection._shell.set_user_facl(path, user, mode, recursive=recursive)
+        res = self._low_level_execute_command(cmd, sudoable=sudoable)
+        return res
 
-        cmd = self._connection._shell.checksum(path, python_interp)
-        data = self._low_level_execute_command(cmd, sudoable=True)
+    def _execute_remote_stat(self, path, all_vars, follow, tmp=None):
+        '''
+        Get information from remote file.
+        '''
+        module_args=dict(
+           path=path,
+           follow=follow,
+           get_md5=False,
+           get_checksum=True,
+           checksum_algo='sha1',
+        )
+        mystat = self._execute_module(module_name='stat', module_args=module_args, task_vars=all_vars, tmp=tmp, delete_remote_tmp=(tmp is None))
+
+        if 'failed' in mystat and mystat['failed']:
+            raise AnsibleError('Failed to get information on remote file (%s): %s' % (path, mystat['msg']))
+
+        if not mystat['stat']['exists']:
+            # empty might be matched, 1 should never match, also backwards compatible
+            mystat['stat']['checksum'] = '1'
+
+        # happens sometimes when it is a dir and not on bsd
+        if not 'checksum' in mystat['stat']:
+            mystat['stat']['checksum'] = ''
+
+        return mystat['stat']
+
+    def _remote_checksum(self, path, all_vars, follow=False):
+        '''
+        Produces a remote checksum given a path,
+        Returns a number 0-4 for specific errors instead of checksum, also ensures it is different
+        0 = unknown error
+        1 = file does not exist, this might not be an error
+        2 = permissions issue
+        3 = its a directory, not a file
+        4 = stat module failed, likely due to not finding python
+        '''
+        x = "0" # unknown error has occured
         try:
-            data2 = data['stdout'].strip().splitlines()[-1]
-            if data2 == u'':
-                # this may happen if the connection to the remote server
-                # failed, so just return "INVALIDCHECKSUM" to avoid errors
-                return "INVALIDCHECKSUM"
+            remote_stat = self._execute_remote_stat(path, all_vars, follow=follow)
+            if remote_stat['exists'] and remote_stat['isdir']:
+                x = "3" # its a directory not a file
             else:
-                return data2.split()[0]
-        except IndexError:
-            display.warning(u"Calculating checksum failed unusually, please report this to "
-                u"the list so it can be fixed\ncommand: %s\n----\noutput: %s\n----\n" % (to_unicode(cmd), data))
-            # this will signal that it changed and allow things to keep going
-            return "INVALIDCHECKSUM"
+                x = remote_stat['checksum'] # if 1, file is missing
+        except AnsibleError as e:
+            errormsg = to_unicode(e)
+            if errormsg.endswith('Permission denied'):
+                x = "2" # cannot read file
+            elif errormsg.endswith('MODULE FAILURE'):
+                x = "4" # python not found or module uncaught exception
+        finally:
+            return x
+
 
     def _remote_expand_user(self, path):
         ''' takes a remote path and performs tilde expansion on the remote host '''
@@ -341,21 +478,49 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         else:
             return initial_fragment
 
-    def _filter_leading_non_json_lines(self, data):
+    @staticmethod
+    def _filter_non_json_lines(data):
         '''
         Used to avoid random output from SSH at the top of JSON output, like messages from
         tcagetattr, or where dropbear spews MOTD on every single command (which is nuts).
 
-        need to filter anything which starts not with '{', '[', ', '=' or is an empty line.
-        filter only leading lines since multiline JSON is valid.
+        need to filter anything which does not start with '{', '[', or is an empty line.
+        Have to be careful how we filter trailing junk as multiline JSON is valid.
         '''
-        idx = 0
-        for line in data.splitlines(True):
-            if line.startswith((u'{', u'[')):
+        # Filter initial junk
+        lines = data.splitlines()
+        for start, line in enumerate(lines):
+            line = line.strip()
+            if line.startswith(u'{'):
+                endchar = u'}'
                 break
-            idx = idx + len(line)
+            elif line.startswith(u'['):
+                endchar = u']'
+                break
+        else:
+            display.debug('No start of json char found')
+            raise ValueError('No start of json char found')
 
-        return data[idx:]
+        # Filter trailing junk
+        lines = lines[start:]
+        lines.reverse()
+        for end, line in enumerate(lines):
+            if line.strip().endswith(endchar):
+                break
+        else:
+            display.debug('No end of json char found')
+            raise ValueError('No end of json char found')
+
+        if end < len(lines) - 1:
+            # Trailing junk is uncommon and can point to things the user might
+            # want to change.  So print a warning if we find any
+            trailing_junk = lines[:end]
+            trailing_junk.reverse()
+            display.warning('Module invocation had junk after the JSON data: %s' % '\n'.join(trailing_junk))
+
+        lines = lines[end:]
+        lines.reverse()
+        return '\n'.join(lines)
 
     def _strip_success_message(self, data):
         '''
@@ -387,6 +552,9 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         else:
             module_args['_ansible_check_mode'] = False
 
+        # Get the connection user for permission checks
+        remote_user = task_vars.get('ansible_ssh_user') or self._play_context.remote_user
+
         # set no log in the module arguments, if required
         module_args['_ansible_no_log'] = self._play_context.no_log or C.DEFAULT_NO_TARGET_SYSLOG
 
@@ -397,44 +565,60 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         module_args['_ansible_diff'] = self._play_context.diff
 
         # let module know our verbosity
-        module_args['_ansible_verbosity'] = self._display.verbosity
+        module_args['_ansible_verbosity'] = display.verbosity
 
-        (module_style, shebang, module_data) = self._configure_module(module_name=module_name, module_args=module_args, task_vars=task_vars)
-        if not shebang:
+        # give the module information about the ansible version
+        module_args['_ansible_version'] = __version__
+
+        # give the module information about its name
+        module_args['_ansible_module_name'] = module_name
+
+        # set the syslog facility to be used in the module
+        module_args['_ansible_syslog_facility'] = task_vars.get('ansible_syslog_facility', C.DEFAULT_SYSLOG_FACILITY)
+
+        # let module know about filesystems that selinux treats specially
+        module_args['_ansible_selinux_special_fs'] = C.DEFAULT_SELINUX_SPECIAL_FS
+
+        (module_style, shebang, module_data, module_path) = self._configure_module(module_name=module_name, module_args=module_args, task_vars=task_vars)
+        display.vvv("Using module file %s" % module_path)
+        if not shebang and module_style != 'binary':
             raise AnsibleError("module (%s) is missing interpreter line" % module_name)
 
         # a remote tmp path may be necessary and not already created
         remote_module_path = None
         args_file_path = None
         if not tmp and self._late_needs_tmp_path(tmp, module_style):
-            tmp = self._make_tmp_path()
+            tmp = self._make_tmp_path(remote_user)
 
         if tmp:
-            remote_module_filename = self._connection._shell.get_remote_filename(module_name)
+            remote_module_filename = self._connection._shell.get_remote_filename(module_path)
             remote_module_path = self._connection._shell.join_path(tmp, remote_module_filename)
-            if module_style in ['old', 'non_native_want_json']:
+            if module_style in ('old', 'non_native_want_json', 'binary'):
                 # we'll also need a temp file to hold our module arguments
                 args_file_path = self._connection._shell.join_path(tmp, 'args')
 
         if remote_module_path or module_style != 'new':
-            display.debug("transferring module to remote")
-            self._transfer_data(remote_module_path, module_data)
+            display.debug("transferring module to remote %s" % remote_module_path)
+            if module_style == 'binary':
+                self._transfer_file(module_path, remote_module_path)
+            else:
+                self._transfer_data(remote_module_path, module_data)
             if module_style == 'old':
                 # we need to dump the module args to a k=v string in a file on
                 # the remote system, which can be read and parsed by the module
                 args_data = ""
                 for k,v in iteritems(module_args):
-                    args_data += '%s="%s" ' % (k, pipes.quote(text_type(v)))
+                    args_data += '%s=%s ' % (k, pipes.quote(text_type(v)))
                 self._transfer_data(args_file_path, args_data)
-            elif module_style == 'non_native_want_json':
+            elif module_style in ('non_native_want_json', 'binary'):
                 self._transfer_data(args_file_path, json.dumps(module_args))
             display.debug("done transferring module to remote")
 
         environment_string = self._compute_environment_string()
 
-        if tmp and "tmp" in tmp and self._play_context.become and self._play_context.become_user != 'root':
-            # deal with possible umask issues once sudo'ed to other user
-            self._remote_chmod('a+r', remote_module_path)
+        # Fix permissions of the tmp path and tmp files.  This should be
+        # called after all files have been transferred.
+        self._fixup_perms(tmp, remote_user, recursive=True)
 
         cmd = ""
         in_data = None
@@ -451,9 +635,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 # not sudoing or sudoing to root, so can cleanup files in the same step
                 rm_tmp = tmp
 
-        python_interp = task_vars.get('ansible_python_interpreter', 'python')
-
-        cmd = self._connection._shell.build_module_command(environment_string, shebang, cmd, arg_path=args_file_path, rm_tmp=rm_tmp, python_interpreter=python_interp, connection=self._connection)
+        cmd = self._connection._shell.build_module_command(environment_string, shebang, cmd, arg_path=args_file_path, rm_tmp=rm_tmp)
         cmd = cmd.strip()
 
         sudoable = True
@@ -462,27 +644,20 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             # specified in the play, not the sudo_user
             sudoable = False
 
-        res = self._low_level_execute_command(cmd, sudoable=sudoable, in_data=in_data, tty=True)
+        res = self._low_level_execute_command(cmd, sudoable=sudoable, in_data=in_data)
 
         if tmp and "tmp" in tmp and not C.DEFAULT_KEEP_REMOTE_FILES and not persist_files and delete_remote_tmp:
             if self._play_context.become and self._play_context.become_user != 'root':
                 # not sudoing to root, so maybe can't delete files as that other user
                 # have to clean up temp files as original user in a second step
-                cmd2 = self._connection._shell.remove(tmp, recurse=True)
-                self._low_level_execute_command(cmd2, sudoable=False)
+                tmp_rm_cmd = self._connection._shell.remove(tmp, recurse=True)
+                tmp_rm_res = self._low_level_execute_command(tmp_rm_cmd, sudoable=False)
+                tmp_rm_data = self._parse_returned_data(tmp_rm_res)
+                if tmp_rm_data.get('rc', 0) != 0:
+                    display.warning('Error deleting remote temporary files (rc: {0}, stderr: {1})'.format(tmp_rm_res.get('rc'), tmp_rm_res.get('stderr', 'No error string available.')))
 
-        try:
-            data = json.loads(self._filter_leading_non_json_lines(res.get('stdout', u'')))
-        except ValueError:
-            # not valid json, lets try to capture error
-            data = dict(failed=True, parsed=False)
-            if 'stderr' in res and res['stderr'].startswith(u'Traceback'):
-                data['exception'] = res['stderr']
-            else:
-                data['msg'] = "MODULE FAILURE"
-                data['module_stdout'] = res.get('stdout', u'')
-                if 'stderr' in res:
-                    data['module_stderr'] = res['stderr']
+        # parse the main result
+        data = self._parse_returned_data(res)
 
         # pre-split stdout into lines, if stdout is in the data and there
         # isn't already a stdout_lines value there
@@ -492,8 +667,21 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         display.debug("done with _execute_module (%s, %s)" % (module_name, module_args))
         return data
 
-    def _low_level_execute_command(self, cmd, sudoable=True, in_data=None,
-            tty=False, executable=C.DEFAULT_EXECUTABLE, encoding_errors='replace'):
+    def _parse_returned_data(self, res):
+        try:
+            data = json.loads(self._filter_non_json_lines(res.get('stdout', u'')))
+        except ValueError:
+            # not valid json, lets try to capture error
+            data = dict(failed=True, parsed=False)
+            data['msg'] = "MODULE FAILURE"
+            data['module_stdout'] = res.get('stdout', u'')
+            if 'stderr' in res:
+                data['module_stderr'] = res['stderr']
+                if res['stderr'].startswith(u'Traceback'):
+                    data['exception'] = res['stderr']
+        return data
+
+    def _low_level_execute_command(self, cmd, sudoable=True, in_data=None, executable=None, encoding_errors='replace'):
         '''
         This is the function which executes the low level shell command, which
         may be commands to create/remove directories for temporary files, or to
@@ -508,14 +696,11 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             replacement strategy (python3 could use surrogateescape)
         '''
 
-        if executable is not None:
-            cmd = executable + ' -c ' + pipes.quote(cmd)
-
         display.debug("_low_level_execute_command(): starting")
         if not cmd:
             # this can happen with powershell modules when there is no analog to a Windows command (like chmod)
             display.debug("_low_level_execute_command(): no command, exiting")
-            return dict(stdout='', stderr='')
+            return dict(stdout='', stderr='', rc=254)
 
         allow_same_user = C.BECOME_ALLOW_SAME_USER
         same_user = self._play_context.become_user == self._play_context.remote_user
@@ -523,8 +708,17 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             display.debug("_low_level_execute_command(): using become for this command")
             cmd = self._play_context.make_become_cmd(cmd, executable=executable)
 
+        if self._connection.allow_executable:
+            if executable is None:
+                executable = self._play_context.executable
+                # mitigation for SSH race which can drop stdout (https://github.com/ansible/ansible/issues/13876)
+                # only applied for the default executable to avoid interfering with the raw action
+                cmd = self._connection._shell.append_command(cmd, 'sleep 0')
+            if executable:
+                cmd = executable + ' -c ' + pipes.quote(cmd)
+
         display.debug("_low_level_execute_command(): executing: %s" % (cmd,))
-        rc, stdout, stderr = self._connection.exec_command(cmd, in_data=in_data, sudoable=sudoable, tty=tty)
+        rc, stdout, stderr = self._connection.exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         # stdout and stderr may be either a file-like or a bytes object.
         # Convert either one to a text type
@@ -545,8 +739,10 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         if rc is None:
             rc = 0
 
-        display.debug("_low_level_execute_command() done: rc=%d, stdout=%s, stderr=%s" % (rc, stdout, stderr))
+        # be sure to remove the BECOME-SUCCESS message now
+        out = self._strip_success_message(out)
 
+        display.debug("_low_level_execute_command() done: rc=%d, stdout=%s, stderr=%s" % (rc, stdout, stderr))
         return dict(rc=rc, stdout=out, stdout_lines=out.splitlines(), stderr=err)
 
     def _get_first_available_file(self, faf, of=None, searchdir='files'):
@@ -584,7 +780,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 diff['before'] = ''
             elif peek_result['appears_binary']:
                 diff['dst_binary'] = 1
-            elif peek_result['size'] > C.MAX_FILE_SIZE_FOR_DIFF:
+            elif C.MAX_FILE_SIZE_FOR_DIFF > 0 and peek_result['size'] > C.MAX_FILE_SIZE_FOR_DIFF:
                 diff['dst_larger'] = C.MAX_FILE_SIZE_FOR_DIFF
             else:
                 display.debug("Slurping the file %s" % source)
@@ -599,23 +795,59 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                     diff['before'] = dest_contents
 
             if source_file:
-                display.debug("Reading local copy of the file %s" % source)
-                try:
-                    src = open(source)
-                    src_contents = src.read(8192)
-                    st = os.stat(source)
-                except Exception as e:
-                    raise AnsibleError("Unexpected error while reading source (%s) for diff: %s " % (source, str(e)))
-                if "\x00" in src_contents:
-                    diff['src_binary'] = 1
-                elif st[stat.ST_SIZE] > C.MAX_FILE_SIZE_FOR_DIFF:
+                st = os.stat(source)
+                if C.MAX_FILE_SIZE_FOR_DIFF > 0 and st[stat.ST_SIZE] > C.MAX_FILE_SIZE_FOR_DIFF:
                     diff['src_larger'] = C.MAX_FILE_SIZE_FOR_DIFF
                 else:
-                    diff['after_header'] = source
-                    diff['after'] = src_contents
+                    display.debug("Reading local copy of the file %s" % source)
+                    try:
+                        src = open(source)
+                        src_contents = src.read()
+                    except Exception as e:
+                        raise AnsibleError("Unexpected error while reading source (%s) for diff: %s " % (source, str(e)))
+
+                    if "\x00" in src_contents:
+                        diff['src_binary'] = 1
+                    else:
+                        diff['after_header'] = source
+                        diff['after'] = src_contents
             else:
                 display.debug("source of file passed in")
                 diff['after_header'] = 'dynamically generated'
                 diff['after'] = source
 
+        if self._play_context.no_log:
+            if 'before' in diff:
+                diff["before"] = ""
+            if 'after' in diff:
+                diff["after"] = " [[ Diff output has been hidden because 'no_log: true' was specified for this result ]]"
+
         return diff
+
+    def _find_needle(self, dirname, needle):
+        '''
+            find a needle in haystack of paths, optionally using 'dirname' as a subdir.
+            This will build the ordered list of paths to search and pass them to dwim
+            to get back the first existing file found.
+        '''
+
+        path_stack = []
+
+        dep_chain =  self._task._block.get_dep_chain()
+        # inside role: add the dependency chain
+        if dep_chain:
+            path_stack.extend(reversed([x._role_path for x in dep_chain]))
+
+
+        task_dir = os.path.dirname(self._task.get_path())
+        # include from diff directory: add it to file path
+        if not task_dir.endswith('tasks') and task_dir != self._loader.get_basedir():
+            path_stack.append(task_dir)
+
+        result = self._loader.path_dwim_relative_stack(path_stack, dirname, needle)
+
+        if result is None:
+            raise AnsibleError("Unable to find '%s' in expected paths." % needle)
+
+        return result
+

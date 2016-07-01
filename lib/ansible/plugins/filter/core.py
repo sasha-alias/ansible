@@ -68,23 +68,23 @@ class AnsibleJSONEncoder(json.JSONEncoder):
         if isinstance(o, HostVars):
             return dict(o)
         else:
-            return o
+            return json.JSONEncoder.default(o)
 
 def to_yaml(a, *args, **kw):
     '''Make verbose, human readable yaml'''
     transformed = yaml.dump(a, Dumper=AnsibleDumper, allow_unicode=True, **kw)
     return to_unicode(transformed)
 
-def to_nice_yaml(a, *args, **kw):
+def to_nice_yaml(a, indent=4, *args, **kw):
     '''Make verbose, human readable yaml'''
-    transformed = yaml.dump(a, Dumper=AnsibleDumper, indent=4, allow_unicode=True, default_flow_style=False, **kw)
+    transformed = yaml.dump(a, Dumper=AnsibleDumper, indent=indent, allow_unicode=True, default_flow_style=False, **kw)
     return to_unicode(transformed)
 
 def to_json(a, *args, **kw):
     ''' Convert the value to JSON '''
     return json.dumps(a, cls=AnsibleJSONEncoder, *args, **kw)
 
-def to_nice_json(a, *args, **kw):
+def to_nice_json(a, indent=4, *args, **kw):
     '''Make verbose, human readable JSON'''
     # python-2.6's json encoder is buggy (can't encode hostvars)
     if sys.version_info < (2, 7):
@@ -99,14 +99,15 @@ def to_nice_json(a, *args, **kw):
                 pass
             else:
                 if major >= 2:
-                    return simplejson.dumps(a, indent=4, sort_keys=True, *args, **kw)
+                    return simplejson.dumps(a, indent=indent, sort_keys=True, *args, **kw)
+
     try:
-        return json.dumps(a, indent=4, sort_keys=True, cls=AnsibleJSONEncoder, *args, **kw)
+        return json.dumps(a, indent=indent, sort_keys=True, cls=AnsibleJSONEncoder, *args, **kw)
     except:
         # Fallback to the to_json filter
         return to_json(a, *args, **kw)
 
-def bool(a):
+def to_bool(a):
     ''' return a bool for the arg '''
     if a is None or type(a) == bool:
         return a
@@ -137,6 +138,45 @@ def regex_replace(value='', pattern='', replacement='', ignorecase=False):
         flags = 0
     _re = re.compile(pattern, flags=flags)
     return _re.sub(replacement, value)
+
+def regex_findall(value, regex, multiline=False, ignorecase=False):
+    ''' Perform re.findall and return the list of matches '''
+    flags = 0
+    if ignorecase:
+        flags |= re.I
+    if multiline:
+        flags |= re.M
+    return re.findall(regex, value, flags)
+
+def regex_search(value, regex, *args, **kwargs):
+    ''' Perform re.search and return the list of matches or a backref '''
+
+    groups = list()
+    for arg in args:
+        if arg.startswith('\\g'):
+            match = re.match(r'\\g<(\S+)>', arg).group(1)
+            groups.append(match)
+        elif arg.startswith('\\'):
+            match = int(re.match(r'\\(\d+)', arg).group(1))
+            groups.append(match)
+        else:
+            raise errors.AnsibleFilterError('Unknown argument')
+
+    flags = 0
+    if kwargs.get('ignorecase'):
+        flags |= re.I
+    if kwargs.get('multiline'):
+        flags |= re.M
+
+    match = re.search(regex, value, flags)
+    if match:
+        if not groups:
+            return match.group()
+        else:
+            items = list()
+            for item in groups:
+                items.append(match.group(item))
+            return items
 
 def ternary(value, true_val, false_val):
     '''  value ? true_val : false_val '''
@@ -392,7 +432,7 @@ class FilterModule(object):
             'win_splitdrive': partial(unicode_wrap, ntpath.splitdrive),
 
             # value as boolean
-            'bool': bool,
+            'bool': to_bool,
 
             # quote string for shell usage
             'quote': quote,
@@ -414,6 +454,8 @@ class FilterModule(object):
             # regex
             'regex_replace': regex_replace,
             'regex_escape': regex_escape,
+            'regex_search': regex_search,
+            'regex_findall': regex_findall,
 
             # ? : ;
             'ternary': ternary,

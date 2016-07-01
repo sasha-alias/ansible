@@ -130,6 +130,8 @@ Here is an example::
 Note that you must have passphrase-less SSH keys or an ssh-agent configured for this to work, otherwise rsync
 will need to ask for a passphrase.
 
+The `ansible_host` variable (`ansible_ssh_host` in 1.x) reflects the host a task is delegated to.
+
 .. _delegate_facts:
 
 Delegated facts
@@ -147,7 +149,7 @@ In 2.0, the directive `delegate_facts` may be set to `True` to assign the task's
           setup:
           delegate_to: "{{item}}"
           delegate_facts: True
-          with_items: "{{groups['dbservers'}}"
+          with_items: "{{groups['dbservers']}}"
 
 The above will gather facts for the machines in the dbservers group and assign the facts to those machines and not to app_servers.
 This way you can lookup `hostvars['dbhost1']['default_ipv4_addresses'][0]` even though dbservers were not part of the play, or left out by using `--limit`.
@@ -190,7 +192,7 @@ This approach is similar to applying a conditional to a task such as::
           when: inventory_hostname == webservers[0]
 
 .. note::
-     When used together with "serial", tasks marked as "run_once" will be ran on one host in *each* serial batch.
+     When used together with "serial", tasks marked as "run_once" will be run on one host in *each* serial batch.
      If it's crucial that the task is run only once regardless of "serial" mode, use
      :code:`inventory_hostname == my_group_name[0]` construct.
 
@@ -200,7 +202,7 @@ Local Playbooks
 ```````````````
 
 It may be useful to use a playbook locally, rather than by connecting over SSH.  This can be useful
-for assuring the configuration of a system by putting a playbook on a crontab.  This may also be used
+for assuring the configuration of a system by putting a playbook in a crontab.  This may also be used
 to run a playbook inside an OS installer, such as an Anaconda kickstart.
 
 To run an entire playbook locally, just set the "hosts:" line to "hosts: 127.0.0.1" and then run the playbook like so::
