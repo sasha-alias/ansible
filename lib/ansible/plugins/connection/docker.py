@@ -174,9 +174,9 @@ class Connection(ConnectionBase):
             )
             self._connected = True
 
-    def exec_command(self, cmd, in_data=None, sudoable=False, tty=False):
+    def exec_command(self, cmd, in_data=None, sudoable=False):
         """ Run a command on the docker host """
-        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable, tty=tty)
+        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         local_cmd = self._build_exec_cmd([self._play_context.executable, '-c', cmd])
 

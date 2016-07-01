@@ -245,10 +245,10 @@ class Connection(ConnectionBase):
 
         return ssh
 
-    def exec_command(self, cmd, in_data=None, sudoable=True, tty=False):
+    def exec_command(self, cmd, in_data=None, sudoable=True):
         ''' run a command on the remote host '''
 
-        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable, tty=tty)
+        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         if in_data:
             raise AnsibleError("Internal Error: this module does not support optimized module pipelining")

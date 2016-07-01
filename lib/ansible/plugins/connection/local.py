@@ -59,10 +59,10 @@ class Connection(ConnectionBase):
             self._connected = True
         return self
 
-    def exec_command(self, cmd, in_data=None, sudoable=True, tty=False):
+    def exec_command(self, cmd, in_data=None, sudoable=True):
         ''' run a command on the local host '''
 
-        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable, tty=tty)
+        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         display.debug("in local.exec_command()")
 

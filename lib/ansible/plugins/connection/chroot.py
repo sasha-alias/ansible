@@ -99,9 +99,9 @@ class Connection(ConnectionBase):
 
         return p
 
-    def exec_command(self, cmd, in_data=None, sudoable=False, tty=False):
+    def exec_command(self, cmd, in_data=None, sudoable=False):
         ''' run a command on the chroot '''
-        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable, tty=tty)
+        super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         p = self._buffered_exec_command(cmd)
 
