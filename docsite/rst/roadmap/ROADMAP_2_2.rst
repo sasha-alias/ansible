@@ -52,10 +52,11 @@ Target: September 2016
 
 - **VMware** (Brian, Jtanner)
 
-  - module/inventory script: port to pyvmomi (jtanner, bcoca)
-  - inventory script: allow filtering ala ec2 (jtanner) (undergoing PR process)
+  - *module/inventory script: port to pyvmomi (jtanner, bcoca)*
+    **done:** https://github.com/ansible/ansible/pull/15967
+  - *inventory script: allow filtering ala ec2 (jtanner) (undergoing PR process)*
+    **done:** https://github.com/ansible/ansible/pull/15967
 
-    - https://github.com/ansible/ansible/pull/15967
   - vsphere: feature parity with whereismyjetpack and viasat modules 
 
 - **Windows platform feature parity** (Matt D)
@@ -83,6 +84,7 @@ Target: September 2016
   - Quagga modules 
   - Bird modules (stretch)
   - GoBGP modules (stretch)
+  - Support for Dell Networking operating systems (OS9, OS6, OS10)
 
 - **Implement ‘role revamp’ proposal to give users more control on role/task execution (Brian) **
 
@@ -90,10 +92,11 @@ Target: September 2016
 
 - **Vault** (Jtanner/Adrian)
 
-  - Extend ‘transparent vault file usage’ to other action plugins other than 'copy' 
-  - Add ‘per variable’ vault support (!vault YAML directive, existing PR already)
-  - Add vault/unvault filters https://github.com/ansible/ansible/issues/12087
-  - Add vault support to lookups
+  - *Extend ‘transparent vault file usage’ to other action plugins other than 'copy'(https://github.com/ansible/ansible/issues/7298)*
+    **done:** https://github.com/ansible/ansible/pull/16957
+  - Add ‘per variable’ vault support (!vault YAML directive, existing PR already) https://github.com/ansible/ansible/issues/13287 https://github.com/ansible/ansible/issues/14721
+  - Add vault/unvault filters https://github.com/ansible/ansible/issues/12087 (deferred to 2.3)
+  - Add vault support to lookups (likely deferred to 2.3 or until lookup plugins are revamped)
   - Allow for multiple vault secrets https://github.com/ansible/ansible/issues/13243
   - Config option to turn ‘unvaulting’ failures into warnings https://github.com/ansible/ansible/issues/13244
 
@@ -138,6 +141,7 @@ Target: September 2016
 
   - **CI Performance**
       Reduce time spent waiting on CI for PRs. Combination of optimizing existing Travis setup and offloading work to other services. Will be impacted by available budget.
+      **Done:** Most tests have been migrated from Travis to Shippable.
   - **Core Module Test Organization**
       Relocate core module tests to ansible-modules-core to encourage inclusion of tests in core module PRs.
   - **Documentation**
@@ -146,4 +150,8 @@ Target: September 2016
       Expand test coverage, particularly for CI. Being testing, this is open ended. Will be impacted by available budget.
     - Python 3 - Run integration tests using Python 3 on CI with tagging for those which should pass, so we can track progress and detect regressions.
     - Windows - Create framework for running Windows integration tests, ideally both locally and on CI.
+      **Done:** Windows integration tests now run on Shippable.
+    - FreeBSD - Include FreeBSD in CI coverage. Not originally on the roadmap, this is an intermediary step for CI coverage for OS X.
+      **Done:** FreeBSD integration tests now run on Shippable.
     - OS X - Include OS X in CI coverage.
+      **Done:** OS X integration tests now run on Shippable.

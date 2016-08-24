@@ -49,16 +49,26 @@ try:
 except:
     HAS_LOOSE_VERSION = False
 
+from ansible.module_utils.six import string_types
 
 class AnsibleAWSError(Exception):
     pass
 
 
 def boto3_conn(module, conn_type=None, resource=None, region=None, endpoint=None, **params):
+    try:
+        return _boto3_conn(conn_type=conn_type, resource=resource, region=region, endpoint=endpoint, **params)
+    except ValueError:
+        module.fail_json(msg='There is an issue in the code of the module. You must specify either both, resource or client to the conn_type parameter in the boto3_conn function call')
+
+def _boto3_conn(conn_type=None, resource=None, region=None, endpoint=None, **params):
     profile = params.pop('profile_name', None)
 
     if conn_type not in ['both', 'resource', 'client']:
-        module.fail_json(msg='There is an issue in the code of the module. You must specify either both, resource or client to the conn_type parameter in the boto3_conn function call')
+        raise ValueError('There is an issue in the calling code. You '
+                         'must specify either both, resource, or client to '
+                         'the conn_type parameter in the boto3_conn function '
+                         'call')
 
     if conn_type == 'resource':
         resource = boto3.session.Session(profile_name=profile).resource(resource, region_name=region, endpoint_url=endpoint, **params)
@@ -71,6 +81,7 @@ def boto3_conn(module, conn_type=None, resource=None, region=None, endpoint=None
         client = boto3.session.Session(profile_name=profile).client(resource, region_name=region, endpoint_url=endpoint, **params)
         return client, resource
 
+boto3_inventory_conn = _boto3_conn
 
 def aws_common_argument_spec():
     return dict(
@@ -333,7 +344,7 @@ def ansible_dict_to_boto3_filter_list(filters_dict):
     filters_list = []
     for k,v in filters_dict.iteritems():
         filter_dict = {'Name': k}
-        if isinstance(v, basestring):
+        if isinstance(v, string_types):
             filter_dict['Values'] = [v]
         else:
             filter_dict['Values'] = v
@@ -428,7 +439,7 @@ def get_ec2_security_group_ids_from_names(sec_group_list, ec2_connection, vpc_id
 
     sec_group_id_list = []
 
-    if isinstance(sec_group_list, basestring):
+    if isinstance(sec_group_list, string_types):
         sec_group_list = [sec_group_list]
 
     # Get all security groups

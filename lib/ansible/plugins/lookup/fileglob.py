@@ -21,17 +21,21 @@ import os
 import glob
 
 from ansible.plugins.lookup import LookupBase
+from ansible.errors import AnsibleFileNotFound
+from ansible.utils.unicode import to_bytes, to_unicode
 
 class LookupModule(LookupBase):
 
     def run(self, terms, variables=None, **kwargs):
 
-        basedir = self.get_basedir(variables)
-
         ret = []
         for term in terms:
             term_file = os.path.basename(term)
-            dwimmed_path = self._loader.path_dwim_relative(basedir, 'files', os.path.dirname(term))
-            globbed = glob.glob(os.path.join(dwimmed_path, term_file))
-            ret.extend(g for g in globbed if os.path.isfile(g))
+            try:
+                dwimmed_path = self.find_file_in_search_path(variables, 'files', os.path.dirname(term))
+            except AnsibleFileNotFound:
+                dwimmed_path = None
+            if dwimmed_path:
+                globbed = glob.glob(to_bytes(os.path.join(dwimmed_path, term_file), errors='strict'))
+                ret.extend(to_unicode(g, errors='strict') for g in globbed if os.path.isfile(g))
         return ret

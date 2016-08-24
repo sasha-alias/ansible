@@ -83,12 +83,8 @@ class TaskExecutor:
         display.debug("in run()")
 
         try:
-            # lookup plugins need to know if this task is executing from
-            # a role, so that it can properly find files/templates/etc.
-            roledir = None
-            if self._task._role:
-                roledir = self._task._role._role_path
-            self._job_vars['roledir'] = roledir
+            # get search path for this task to pass to lookup plugins
+            self._job_vars['ansible_search_path'] = self._task.get_search_path()
 
             items = self._get_loop_items()
             if items is not None:
@@ -192,7 +188,18 @@ class TaskExecutor:
                     except AnsibleUndefinedVariable as e:
                         display.deprecated("Skipping task due to undefined Error, in the future this will be a fatal error.: %s" % to_bytes(e))
                         return None
-                items = self._shared_loader_obj.lookup_loader.get(self._task.loop, loader=self._loader, templar=templar).run(terms=loop_terms, variables=self._job_vars, wantlist=True)
+
+                # get lookup
+                mylookup = self._shared_loader_obj.lookup_loader.get(self._task.loop, loader=self._loader, templar=templar)
+
+                # give lookup task 'context' for subdir (mostly needed for first_found)
+                for subdir in ['template', 'var', 'file']: #TODO: move this to constants?
+                    if subdir in self._task.action:
+                        break
+                setattr(mylookup,'_subdir', subdir + 's')
+
+                # run lookup
+                items = mylookup.run(terms=loop_terms, variables=self._job_vars, wantlist=True)
             else:
                 raise AnsibleError("Unexpected failure in finding the lookup named '%s' in the available lookup plugins" % self._task.loop)
 
@@ -239,7 +246,8 @@ class TaskExecutor:
             task_vars[loop_var] = item
 
             try:
-                tmp_task = self._task.copy()
+                tmp_task = self._task.copy(exclude_parent=True, exclude_tasks=True)
+                tmp_task._parent = self._task._parent
                 tmp_play_context = self._play_context.copy()
             except AnsibleParserError as e:
                 results.append(dict(failed=True, msg=to_unicode(e)))
@@ -258,7 +266,7 @@ class TaskExecutor:
             res[loop_var] = item
             res['_ansible_item_result'] = True
 
-            self._rslt_q.put(TaskResult(self._host, self._task, res), block=False)
+            self._rslt_q.put(TaskResult(self._host.name, self._task._uuid, res), block=False)
             results.append(res)
             del task_vars[loop_var]
 
@@ -423,11 +431,13 @@ class TaskExecutor:
 
         # Read some values from the task, so that we can modify them if need be
         if self._task.until:
-            retries = self._task.retries + 1
+            retries = self._task.retries
             if retries is None:
                 retries = 3
             elif retries <= 0:
                 retries = 1
+            else:
+                retries += 1
         else:
             retries = 1
 
@@ -459,7 +469,7 @@ class TaskExecutor:
 
             if self._task.async > 0:
                 if self._task.poll > 0:
-                    result = self._poll_async_result(result=result, templar=templar)
+                    result = self._poll_async_result(result=result, templar=templar, task_vars=vars_copy)
 
                 # ensure no log is preserved
                 result["_ansible_no_log"] = self._play_context.no_log
@@ -507,7 +517,7 @@ class TaskExecutor:
                         result['_ansible_retry'] = True
                         result['retries'] = retries
                         display.debug('Retrying task, attempt %d of %d' % (attempt, retries))
-                        self._rslt_q.put(TaskResult(self._host, self._task, result), block=False)
+                        self._rslt_q.put(TaskResult(self._host.name, self._task._uuid, result), block=False)
                         time.sleep(delay)
         else:
             if retries > 1:
@@ -543,10 +553,13 @@ class TaskExecutor:
         display.debug("attempt loop complete, returning result")
         return result
 
-    def _poll_async_result(self, result, templar):
+    def _poll_async_result(self, result, templar, task_vars=None):
         '''
         Polls for the specified JID to be complete
         '''
+
+        if task_vars is None:
+            task_vars = self._job_vars
 
         async_jid = result.get('ansible_job_id')
         if async_jid is None:
@@ -575,14 +588,22 @@ class TaskExecutor:
         while time_left > 0:
             time.sleep(self._task.poll)
 
-            async_result = normal_handler.run()
-            if int(async_result.get('finished', 0)) == 1 or 'failed' in async_result or 'skipped' in async_result:
+            async_result = normal_handler.run(task_vars=task_vars)
+            # We do not bail out of the loop in cases where the failure
+            # is associated with a parsing error. The async_runner can
+            # have issues which result in a half-written/unparseable result
+            # file on disk, which manifests to the user as a timeout happening
+            # before it's time to timeout.
+            if int(async_result.get('finished', 0)) == 1 or ('failed' in async_result and async_result.get('_ansible_parsed', False)) or 'skipped' in async_result:
                 break
 
             time_left -= self._task.poll
 
         if int(async_result.get('finished', 0)) != 1:
-            return dict(failed=True, msg="async task did not complete within the requested time")
+            if async_result.get('_ansible_parsed'):
+                return dict(failed=True, msg="async task did not complete within the requested time")
+            else:
+                return dict(failed=True, msg="async task produced unparseable results", async_result=async_result)
         else:
             return async_result
 

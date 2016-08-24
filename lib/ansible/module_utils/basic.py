@@ -27,8 +27,8 @@
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-BOOLEANS_TRUE = ['yes', 'on', '1', 'true', 'True', 1, True]
-BOOLEANS_FALSE = ['no', 'off', '0', 'false', 'False', 0, False]
+BOOLEANS_TRUE = ['y', 'yes', 'on', '1', 'true', 1, True]
+BOOLEANS_FALSE = ['n', 'no', 'off', '0', 'false', 0, False]
 BOOLEANS = BOOLEANS_TRUE + BOOLEANS_FALSE
 
 # ansible modules can be written in any language.  To simplify
@@ -63,55 +63,17 @@ except ImportError:
     HAS_SYSLOG=False
 
 try:
-    # Python 2
-    from itertools import imap
+    from systemd import journal
+    has_journal = True
 except ImportError:
-    # Python 3
-    imap = map
+    has_journal = False
 
+HAVE_SELINUX=False
 try:
-    # Python 2
-    basestring
-except NameError:
-    # Python 3
-    basestring = str
-
-try:
-    # Python 2
-    unicode
-except NameError:
-    # Python 3
-    unicode = str
-
-try:
-    # Python 2.6+
-    bytes
-except NameError:
-    # Python 2.4
-    bytes = str
-
-try:
-    dict.iteritems
-except AttributeError:
-    # Python 3
-    def iteritems(d):
-        return d.items()
-else:
-    # Python 2
-    def iteritems(d):
-        return d.iteritems()
-
-try:
-    reduce
-except NameError:
-    # Python 3
-    from functools import reduce
-
-try:
-    NUMBERTYPES = (int, long, float)
-except NameError:
-    # Python 3
-    NUMBERTYPES = (int, float)
+    import selinux
+    HAVE_SELINUX=True
+except ImportError:
+    pass
 
 # Python2 & 3 way to get NoneType
 NoneType = type(None)
@@ -148,21 +110,6 @@ except ImportError:
         print('\n{"msg": "SyntaxError: probably due to installed simplejson being for a different python version", "failed": true}')
         sys.exit(1)
 
-from ansible.module_utils.six import PY2, PY3, b, binary_type, text_type, string_types
-
-HAVE_SELINUX=False
-try:
-    import selinux
-    HAVE_SELINUX=True
-except ImportError:
-    pass
-
-try:
-    from systemd import journal
-    has_journal = True
-except ImportError:
-    has_journal = False
-
 AVAILABLE_HASH_ALGORITHMS = dict()
 try:
     import hashlib
@@ -186,49 +133,45 @@ except ImportError:
     except ImportError:
         pass
 
+from ansible.module_utils.pycompat24 import get_exception, literal_eval
+from ansible.module_utils.six import (PY2, PY3, b, binary_type, integer_types,
+        iteritems, text_type, string_types)
+from ansible.module_utils.six.moves import map, reduce
+from ansible.module_utils._text import to_native
+
+_NUMBERTYPES = tuple(list(integer_types) + [float])
+
+# Deprecated compat.  Only kept in case another module used these names  Using
+# ansible.module_utils.six is preferred
+
+NUMBERTYPES = _NUMBERTYPES
+
+imap = map
+
 try:
-    from ast import literal_eval
-except ImportError:
-    # a replacement for literal_eval that works with python 2.4. from:
-    # https://mail.python.org/pipermail/python-list/2009-September/551880.html
-    # which is essentially a cut/paste from an earlier (2.6) version of python's
-    # ast.py
-    from compiler import ast, parse
+    # Python 2
+    unicode
+except NameError:
+    # Python 3
+    unicode = text_type
 
-    def literal_eval(node_or_string):
-        """
-        Safely evaluate an expression node or a string containing a Python
-        expression.  The string or node provided may only consist of the  following
-        Python literal structures: strings, numbers, tuples, lists, dicts,  booleans,
-        and None.
-        """
-        _safe_names = {'None': None, 'True': True, 'False': False}
-        if isinstance(node_or_string, basestring):
-            node_or_string = parse(node_or_string, mode='eval')
-        if isinstance(node_or_string, ast.Expression):
-            node_or_string = node_or_string.node
+try:
+    # Python 2.6+
+    bytes
+except NameError:
+    # Python 2.4
+    bytes = binary_type
 
-        def _convert(node):
-            if isinstance(node, ast.Const) and isinstance(node.value, (basestring, int, float, long, complex)):
-                return node.value
-            elif isinstance(node, ast.Tuple):
-                return tuple(map(_convert, node.nodes))
-            elif isinstance(node, ast.List):
-                return list(map(_convert, node.nodes))
-            elif isinstance(node, ast.Dict):
-                return dict((_convert(k), _convert(v)) for k, v in node.items())
-            elif isinstance(node, ast.Name):
-                if node.name in _safe_names:
-                    return _safe_names[node.name]
-            elif isinstance(node, ast.UnarySub):
-                return -_convert(node.expr)
-            raise ValueError('malformed string')
-        return _convert(node_or_string)
+try:
+    # Python 2
+    basestring
+except NameError:
+    # Python 3
+    basestring = string_types
 
 _literal_eval = literal_eval
 
-# Backwards compat.  There were present in basic.py before
-from ansible.module_utils.pycompat24 import get_exception
+# End of deprecated names
 
 # Internal global holding passed in params.  This is consulted in case
 # multiple AnsibleModules are created.  Otherwise each AnsibleModule would
@@ -254,6 +197,7 @@ FILE_COMMON_ARGUMENTS=dict(
     regexp = dict(), # used by assemble
     delimiter = dict(), # used by assemble
     directory_mode = dict(), # used by copy
+    unsafe_writes  = dict(type='bool'), # should be available to any module using atomic_move
 )
 
 PASSWD_ARG_RE = re.compile(r'^[-]{0,2}pass[-]?(word|wd)?')
@@ -353,14 +297,14 @@ def json_dict_unicode_to_bytes(d, encoding='utf-8'):
         and dict container types (the containers that the json module returns)
     '''
 
-    if isinstance(d, unicode):
+    if isinstance(d, text_type):
         return d.encode(encoding)
     elif isinstance(d, dict):
-        return dict(imap(json_dict_unicode_to_bytes, iteritems(d), repeat(encoding)))
+        return dict(map(json_dict_unicode_to_bytes, iteritems(d), repeat(encoding)))
     elif isinstance(d, list):
-        return list(imap(json_dict_unicode_to_bytes, d, repeat(encoding)))
+        return list(map(json_dict_unicode_to_bytes, d, repeat(encoding)))
     elif isinstance(d, tuple):
-        return tuple(imap(json_dict_unicode_to_bytes, d, repeat(encoding)))
+        return tuple(map(json_dict_unicode_to_bytes, d, repeat(encoding)))
     else:
         return d
 
@@ -371,28 +315,32 @@ def json_dict_bytes_to_unicode(d, encoding='utf-8'):
         and dict container types (the containers that the json module returns)
     '''
 
-    if isinstance(d, bytes):
-        return unicode(d, encoding)
+    if isinstance(d, binary_type):
+        # Warning, can traceback
+        return d.decode(encoding)
     elif isinstance(d, dict):
-        return dict(imap(json_dict_bytes_to_unicode, iteritems(d), repeat(encoding)))
+        return dict(map(json_dict_bytes_to_unicode, iteritems(d), repeat(encoding)))
     elif isinstance(d, list):
-        return list(imap(json_dict_bytes_to_unicode, d, repeat(encoding)))
+        return list(map(json_dict_bytes_to_unicode, d, repeat(encoding)))
     elif isinstance(d, tuple):
-        return tuple(imap(json_dict_bytes_to_unicode, d, repeat(encoding)))
+        return tuple(map(json_dict_bytes_to_unicode, d, repeat(encoding)))
     else:
         return d
 
 def return_values(obj):
-    """ Return stringified values from datastructures. For use with removing
-    sensitive values pre-jsonification."""
-    if isinstance(obj, basestring):
+    """ Return native stringified values from datastructures.
+
+    For use with removing sensitive values pre-jsonification."""
+    if isinstance(obj, (text_type, binary_type)):
         if obj:
-            if isinstance(obj, bytes):
-                yield obj
-            else:
+            if isinstance(obj, text_type) and PY2:
                 # Unicode objects should all convert to utf-8
-                # (still must deal with surrogateescape on python3)
                 yield obj.encode('utf-8')
+            elif isinstance(obj, binary_type) and PY3:
+                yield obj.decode('utf-8', 'surrogateescape')
+            else:
+                # Already native string for this python version
+                yield obj
         return
     elif isinstance(obj, SEQUENCETYPE):
         for element in obj:
@@ -413,23 +361,29 @@ def return_values(obj):
 def remove_values(value, no_log_strings):
     """ Remove strings in no_log_strings from value.  If value is a container
     type, then remove a lot more"""
-    if isinstance(value, basestring):
-        if isinstance(value, unicode):
-            # This should work everywhere on python2. Need to check
-            # surrogateescape on python3
-            bytes_value = value.encode('utf-8')
-            value_is_unicode = True
-        else:
-            bytes_value = value
-            value_is_unicode = False
-        if bytes_value in no_log_strings:
+    if isinstance(value, (text_type, binary_type)):
+        # Need native str type
+        native_str_value = value
+        if isinstance(value, text_type):
+            value_is_text = True
+            if PY2:
+                native_str_value = value.encode('utf-8')
+        elif isinstance(value, binary_type):
+            value_is_text = False
+            if PY3:
+                native_str_value = value.decode('utf-8', 'surrogateescape')
+
+        if native_str_value in no_log_strings:
             return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
         for omit_me in no_log_strings:
-            bytes_value = bytes_value.replace(omit_me, '*' * 8)
-        if value_is_unicode:
-            value = unicode(bytes_value, 'utf-8', errors='replace')
+            native_str_value = native_str_value.replace(omit_me, '*' * 8)
+
+        if value_is_text and isinstance(native_str_value, binary_type):
+            value = native_str_value.decode('utf-8', 'replace')
+        elif not value_is_text and isinstance(native_str_value, text_type):
+            value = native_str_value.encode('utf-8', 'surrogateescape')
         else:
-            value = bytes_value
+            value = native_str_value
     elif isinstance(value, SEQUENCETYPE):
         return [remove_values(elem, no_log_strings) for elem in value]
     elif isinstance(value, Mapping):
@@ -461,6 +415,8 @@ def heuristic_log_sanitize(data, no_log_values=None):
     # prev_begin: where in the overall string to start a search for
     #   a passwd
     # sep_search_end: where in the string to end a search for the sep
+    data = to_native(data)
+
     output = []
     begin = len(data)
     prev_begin = begin
@@ -585,6 +541,19 @@ def env_fallback(*args, **kwargs):
     else:
         raise AnsibleFallbackNotFound
 
+def _lenient_lowercase(lst):
+    """Lowercase elements of a list.
+
+    If an element is not a string, pass it through untouched.
+    """
+    lowered = []
+    for value in lst:
+        try:
+            lowered.append(value.lower())
+        except AttributeError:
+            lowered.append(value)
+    return lowered
+
 
 class AnsibleFallbackNotFound(Exception):
     pass
@@ -667,6 +636,9 @@ class AnsibleModule(object):
                 'path': self._check_type_path,
                 'raw': self._check_type_raw,
                 'jsonarg': self._check_type_jsonarg,
+                'json': self._check_type_jsonarg,
+                'bytes': self._check_type_bytes,
+                'bits': self._check_type_bits,
             }
         if not bypass_checks:
             self._check_required_arguments()
@@ -762,26 +734,13 @@ class AnsibleModule(object):
             context.append(None)
         return context
 
-    def _to_filesystem_str(self, path):
-        '''Returns filesystem path as a str, if it wasn't already.
-
-        Used in selinux interactions because it cannot accept unicode
-        instances, and specifying complex args in a playbook leaves
-        you with unicode instances.  This method currently assumes
-        that your filesystem encoding is UTF-8.
-
-        '''
-        if isinstance(path, unicode):
-            path = path.encode("utf-8")
-        return path
-
     # If selinux fails to find a default, return an array of None
     def selinux_default_context(self, path, mode=0):
         context = self.selinux_initial_context()
         if not HAVE_SELINUX or not self.selinux_enabled():
             return context
         try:
-            ret = selinux.matchpathcon(self._to_filesystem_str(path), mode)
+            ret = selinux.matchpathcon(to_native(path, 'strict'), mode)
         except OSError:
             return context
         if ret[0] == -1:
@@ -796,7 +755,7 @@ class AnsibleModule(object):
         if not HAVE_SELINUX or not self.selinux_enabled():
             return context
         try:
-            ret = selinux.lgetfilecon_raw(self._to_filesystem_str(path))
+            ret = selinux.lgetfilecon_raw(to_native(path, 'strict'))
         except OSError:
             e = get_exception()
             if e.errno == errno.ENOENT:
@@ -884,7 +843,7 @@ class AnsibleModule(object):
             try:
                 if self.check_mode:
                     return True
-                rc = selinux.lsetfilecon(self._to_filesystem_str(path),
+                rc = selinux.lsetfilecon(to_native(path),
                                          str(':'.join(new_context)))
             except OSError:
                 e = get_exception()
@@ -1338,31 +1297,50 @@ class AnsibleModule(object):
             if isinstance(choices, SEQUENCETYPE):
                 if k in self.params:
                     if self.params[k] not in choices:
-                        choices_str=",".join([str(c) for c in choices])
-                        msg="value of %s must be one of: %s, got: %s" % (k, choices_str, self.params[k])
-                        self.fail_json(msg=msg)
+                        # PyYaml converts certain strings to bools.  If we can unambiguously convert back, do so before checking the value.  If we can't figure this out, module author is responsible.
+                        lowered_choices = None
+                        if self.params[k] == 'False':
+                            lowered_choices = _lenient_lowercase(choices)
+                            FALSEY = frozenset(BOOLEANS_FALSE)
+                            overlap = FALSEY.intersection(choices)
+                            if len(overlap) == 1:
+                                # Extract from a set
+                                (self.params[k],) = overlap
+
+                        if self.params[k] == 'True':
+                            if lowered_choices is None:
+                                lowered_choices = _lenient_lowercase(choices)
+                            TRUTHY = frozenset(BOOLEANS_TRUE)
+                            overlap = TRUTHY.intersection(choices)
+                            if len(overlap) == 1:
+                                (self.params[k],) = overlap
+
+                        if self.params[k] not in choices:
+                            choices_str=",".join([str(c) for c in choices])
+                            msg="value of %s must be one of: %s, got: %s" % (k, choices_str, self.params[k])
+                            self.fail_json(msg=msg)
             else:
                 self.fail_json(msg="internal error: choices for argument %s are not iterable: %s" % (k, choices))
 
-    def safe_eval(self, str, locals=None, include_exceptions=False):
+    def safe_eval(self, value, locals=None, include_exceptions=False):
 
         # do not allow method calls to modules
-        if not isinstance(str, basestring):
-            # already templated to a datastructure, perhaps?
+        if not isinstance(value, string_types):
+            # already templated to a datavaluestructure, perhaps?
             if include_exceptions:
-                return (str, None)
-            return str
-        if re.search(r'\w\.\w+\(', str):
+                return (value, None)
+            return value
+        if re.search(r'\w\.\w+\(', value):
             if include_exceptions:
-                return (str, None)
-            return str
+                return (value, None)
+            return value
         # do not allow imports
-        if re.search(r'import \w+', str):
+        if re.search(r'import \w+', value):
             if include_exceptions:
-                return (str, None)
-            return str
+                return (value, None)
+            return value
         try:
-            result = literal_eval(str)
+            result = literal_eval(value)
             if include_exceptions:
                 return (result, None)
             else:
@@ -1370,11 +1348,11 @@ class AnsibleModule(object):
         except Exception:
             e = get_exception()
             if include_exceptions:
-                return (str, e)
-            return str
+                return (value, e)
+            return value
 
     def _check_type_str(self, value):
-        if isinstance(value, basestring):
+        if isinstance(value, string_types):
             return value
         # Note: This could throw a unicode error if value's __str__() method
         # returns non-ascii.  Have to port utils.to_bytes() if that happens
@@ -1384,7 +1362,7 @@ class AnsibleModule(object):
         if isinstance(value, list):
             return value
 
-        if isinstance(value, basestring):
+        if isinstance(value, string_types):
             return value.split(",")
         elif isinstance(value, int) or isinstance(value, float):
             return [ str(value) ]
@@ -1395,7 +1373,7 @@ class AnsibleModule(object):
         if isinstance(value, dict):
             return value
 
-        if isinstance(value, basestring):
+        if isinstance(value, string_types):
             if value.startswith("{"):
                 try:
                     return json.loads(value)
@@ -1440,7 +1418,7 @@ class AnsibleModule(object):
         if isinstance(value, bool):
             return value
 
-        if isinstance(value, basestring) or isinstance(value, int):
+        if isinstance(value, string_types) or isinstance(value, int):
             return self.boolean(value)
 
         raise TypeError('%s cannot be converted to a bool' % type(value))
@@ -1449,7 +1427,7 @@ class AnsibleModule(object):
         if isinstance(value, int):
             return value
 
-        if isinstance(value, basestring):
+        if isinstance(value, string_types):
             return int(value)
 
         raise TypeError('%s cannot be converted to an int' % type(value))
@@ -1458,7 +1436,7 @@ class AnsibleModule(object):
         if isinstance(value, float):
             return value
 
-        if isinstance(value, basestring):
+        if isinstance(value, string_types):
             return float(value)
 
         raise TypeError('%s cannot be converted to a float' % type(value))
@@ -1470,16 +1448,29 @@ class AnsibleModule(object):
     def _check_type_jsonarg(self, value):
         # Return a jsonified string.  Sometimes the controller turns a json
         # string into a dict/list so transform it back into json here
-        if isinstance(value, (unicode, bytes)):
+        if isinstance(value, (text_type, binary_type)):
             return value.strip()
         else:
-            if isinstance(value (list, tuple, dict)):
+            if isinstance(value, (list, tuple, dict)):
                 return json.dumps(value)
         raise TypeError('%s cannot be converted to a json string' % type(value))
 
     def _check_type_raw(self, value):
         return value
 
+
+    def _check_type_bytes(self, value):
+        try:
+            self.human_to_bytes(value)
+        except ValueError:
+            raise TypeError('%s cannot be converted to a Byte value' % type(value))
+
+
+    def _check_type_bits(self, value):
+        try:
+            self.human_to_bytes(value, bits=True)
+        except ValueError:
+            raise TypeError('%s cannot be converted to a Bit value' % type(value))
 
     def _check_argument_types(self):
         ''' ensure all arguments have the requested type '''
@@ -1565,16 +1556,16 @@ class AnsibleModule(object):
                 log_args = dict()
 
             module = 'ansible-%s' % self._name
-            if isinstance(module, bytes):
+            if isinstance(module, binary_type):
                 module = module.decode('utf-8', 'replace')
 
             # 6655 - allow for accented characters
-            if not isinstance(msg, (bytes, unicode)):
+            if not isinstance(msg, (binary_type, text_type)):
                 raise TypeError("msg should be a string (got %s)" % type(msg))
 
             # We want journal to always take text type
             # syslog takes bytes on py2, text type on py3
-            if isinstance(msg, bytes):
+            if isinstance(msg, binary_type):
                 journal_msg = remove_values(msg.decode('utf-8', 'replace'), self.no_log_values)
             else:
                 # TODO: surrogateescape is a danger here on Py3
@@ -1615,18 +1606,18 @@ class AnsibleModule(object):
                 log_args[param] = 'NOT_LOGGING_PASSWORD'
             else:
                 param_val = self.params[param]
-                if not isinstance(param_val, basestring):
+                if not isinstance(param_val, (text_type, binary_type)):
                     param_val = str(param_val)
-                elif isinstance(param_val, unicode):
+                elif isinstance(param_val, text_type):
                     param_val = param_val.encode('utf-8')
                 log_args[param] = heuristic_log_sanitize(param_val, self.no_log_values)
 
         msg = []
         for arg in log_args:
             arg_val = log_args[arg]
-            if not isinstance(arg_val, basestring):
+            if not isinstance(arg_val, (text_type, binary_type)):
                 arg_val = str(arg_val)
-            elif isinstance(arg_val, unicode):
+            elif isinstance(arg_val, text_type):
                 arg_val = arg_val.encode('utf-8')
             msg.append('%s=%s' % (arg, arg_val))
         if msg:
@@ -1691,7 +1682,7 @@ class AnsibleModule(object):
         ''' return a bool for the arg '''
         if arg is None or type(arg) == bool:
             return arg
-        if isinstance(arg, basestring):
+        if isinstance(arg, string_types):
             arg = arg.lower()
         if arg in BOOLEANS_TRUE:
             return True
@@ -1819,7 +1810,7 @@ class AnsibleModule(object):
         if os.path.exists(fn):
             # backups named basename-YYYY-MM-DD@HH:MM:SS~
             ext = time.strftime("%Y-%m-%d@%H:%M:%S~", time.localtime(time.time()))
-            backupdest = '%s.%s' % (fn, ext)
+            backupdest = '%s.%s.%s' % (fn, os.getpid(), ext)
 
             try:
                 shutil.copy2(fn, backupdest)
@@ -1978,7 +1969,7 @@ class AnsibleModule(object):
             if use_unsafe_shell:
                 args = " ".join([pipes.quote(x) for x in args])
                 shell = True
-        elif isinstance(args, basestring) and use_unsafe_shell:
+        elif isinstance(args, (binary_type, text_type)) and use_unsafe_shell:
             shell = True
         elif isinstance(args, string_types):
             # On python2.6 and below, shlex has problems with text type
@@ -2031,7 +2022,7 @@ class AnsibleModule(object):
         # If using ansible or ansible-playbook with a remote system ...
         #   /tmp/ansible_vmweLQ/ansible_modlib.zip/ansible/module_utils/basic.py
 
-        # Clean out python paths set by ziploader
+        # Clean out python paths set by ansiballz
         if 'PYTHONPATH' in os.environ:
             pypaths = os.environ['PYTHONPATH'].split(':')
             pypaths = [x for x in pypaths \
@@ -2189,21 +2180,54 @@ class AnsibleModule(object):
         fh.write(str)
         fh.close()
 
-    def pretty_bytes(self,size):
+    def bytes_to_human(self, size):
+
         ranges = (
-                (1<<70, 'ZB'),
-                (1<<60, 'EB'),
-                (1<<50, 'PB'),
-                (1<<40, 'TB'),
-                (1<<30, 'GB'),
-                (1<<20, 'MB'),
-                (1<<10, 'KB'),
+                (1 << 70, 'ZB'),
+                (1 << 60, 'EB'),
+                (1 << 50, 'PB'),
+                (1 << 40, 'TB'),
+                (1 << 30, 'GB'),
+                (1 << 20, 'MB'),
+                (1 << 10, 'KB'),
                 (1, 'Bytes')
             )
         for limit, suffix in ranges:
             if size >= limit:
                 break
         return '%.2f %s' % (float(size)/ limit, suffix)
+
+    # for backwards compatibility
+    pretty_bytes = bytes_to_human
+
+    def human_to_bytes(number, bits=False):
+
+        result = None
+        suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB']
+        full = 'Bytes'
+
+        if bits:
+            suffixes = [ x.replace('B', 'b') for x in suffixes ]
+            full = 'Bits'
+
+        if number is None:
+            result = 0
+        elif isinstance(number, int):
+            result = number
+        elif number.isdigit():
+            result = int(number)
+        elif full in number:
+            result = int(number.replace(full,''))
+        else:
+            for i, suffix in enumerate(suffixes):
+                if suffix in number:
+                    result = int(number.replace(suffix ,'')) * (1024 ** i)
+                    break
+
+        if result is None:
+            raise ValueError("Failed to convert %s. The suffix must be one of %s or %s" % (number, full, ', '.join(suffixes)))
+
+        return result
 
     #
     # Backwards compat

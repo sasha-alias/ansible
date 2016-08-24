@@ -26,7 +26,6 @@ import itertools
 import json
 import os.path
 import ntpath
-import types
 import pipes
 import glob
 import re
@@ -34,13 +33,11 @@ import crypt
 import hashlib
 import string
 from functools import partial
-import operator as py_operator
 from random import SystemRandom, shuffle
 import uuid
 
 import yaml
 from jinja2.filters import environmentfilter
-from distutils.version import LooseVersion, StrictVersion
 from ansible.compat.six import iteritems, string_types
 
 from ansible import errors
@@ -129,8 +126,7 @@ def fileglob(pathname):
 def regex_replace(value='', pattern='', replacement='', ignorecase=False):
     ''' Perform a `re.sub` returning a string '''
 
-    if not isinstance(value, basestring):
-        value = str(value)
+    value = to_unicode(value, errors='strict', nonstring='simplerepr')
 
     if ignorecase:
         flags = re.I
@@ -186,32 +182,6 @@ def ternary(value, true_val, false_val):
         return false_val
 
 
-def version_compare(value, version, operator='eq', strict=False):
-    ''' Perform a version comparison on a value '''
-    op_map = {
-        '==': 'eq', '=':  'eq', 'eq': 'eq',
-        '<':  'lt', 'lt': 'lt',
-        '<=': 'le', 'le': 'le',
-        '>':  'gt', 'gt': 'gt',
-        '>=': 'ge', 'ge': 'ge',
-        '!=': 'ne', '<>': 'ne', 'ne': 'ne'
-    }
-
-    if strict:
-        Version = StrictVersion
-    else:
-        Version = LooseVersion
-
-    if operator in op_map:
-        operator = op_map[operator]
-    else:
-        raise errors.AnsibleFilterError('Invalid operator type')
-
-    try:
-        method = getattr(py_operator, operator)
-        return method(Version(str(value)), Version(str(version)))
-    except Exception as e:
-        raise errors.AnsibleFilterError('Version comparison: %s' % e)
 
 def regex_escape(string):
     '''Escape all regular expressions special characters from STRING.'''
@@ -261,7 +231,6 @@ def get_encrypted_password(password, hashtype='sha512', salt=None):
         'sha512':   '6',
     }
 
-    hastype = hashtype.lower()
     if hashtype in cryptmethod:
         if salt is None:
             r = SystemRandom()
@@ -461,9 +430,6 @@ class FilterModule(object):
             'ternary': ternary,
 
             # list
-            # version comparison
-            'version_compare': version_compare,
-
             # random stuff
             'random': rand,
             'shuffle': randomize_list,

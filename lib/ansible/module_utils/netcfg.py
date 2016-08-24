@@ -1,20 +1,29 @@
+# This code is part of Ansible, but is an independent component.
+# This particular file snippet, and this file snippet only, is BSD licensed.
+# Modules you write using this snippet, which is embedded dynamically by Ansible
+# still belong to the author of the module, and may assign their own license
+# to the complete work.
 #
-# (c) 2015 Peter Sprygada, <psprygada@ansible.com>
+# Copyright (c) 2015 Peter Sprygada, <psprygada@ansible.com>
 #
-# This file is part of Ansible
+# Redistribution and use in source and binary forms, with or without modification,
+# are permitted provided that the following conditions are met:
 #
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+#    * Redistributions of source code must retain the above copyright
+#      notice, this list of conditions and the following disclaimer.
+#    * Redistributions in binary form must reproduce the above copyright notice,
+#      this list of conditions and the following disclaimer in the documentation
+#      and/or other materials provided with the distribution.
 #
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+# WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
+# USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
 import re
@@ -24,9 +33,37 @@ import shlex
 import itertools
 
 from ansible.module_utils.basic import BOOLEANS_TRUE, BOOLEANS_FALSE
-from ansible.module_utils.network import to_list
+from ansible.module_utils.six import string_types
 
-DEFAULT_COMMENT_TOKENS = ['#', '!']
+DEFAULT_COMMENT_TOKENS = ['#', '!', '/*', '*/']
+
+
+def to_list(val):
+    if isinstance(val, (list, tuple)):
+        return list(val)
+    elif val is not None:
+        return [val]
+    else:
+        return list()
+
+class Config(object):
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __call__(self, commands):
+        lines = to_list(commands)
+        return self.connection.configure(commands)
+
+    def load_config(self, commands, **kwargs):
+        commands = to_list(commands)
+        return self.connection.load_config(commands, **kwargs)
+
+    def get_config(self, **kwargs):
+        return self.connection.get_config(**kwargs)
+
+    def save_config(self):
+        return self.connection.save_config()
 
 class ConfigLine(object):
 
@@ -106,6 +143,21 @@ def parse(lines, indent, comment_tokens=None):
 
     return config
 
+def dumps(objects, output='block'):
+    if output == 'block':
+        items = [c.raw for c in objects]
+    elif output == 'commands':
+        items = [c.text for c in objects]
+    elif output == 'lines':
+        items = list()
+        for obj in objects:
+            line = list()
+            line.extend([p.text for p in obj.parents])
+            line.append(obj.text)
+            items.append(' '.join(line))
+    else:
+        raise TypeError('unknown value supplied for keyword output')
+    return '\n'.join(items)
 
 class NetworkConfig(object):
 
@@ -113,6 +165,10 @@ class NetworkConfig(object):
         self.indent = indent or 1
         self._config = list()
         self._device_os = device_os
+        self._syntax = 'block' # block, lines, junos
+
+        if self._device_os == 'junos':
+            self._syntax = 'junos'
 
         if contents:
             self.load(contents)
@@ -121,20 +177,10 @@ class NetworkConfig(object):
     def items(self):
         return self._config
 
-    @property
-    def lines(self):
-        lines = list()
-        for item, next_item in get_next(self.items):
-            if next_item is None:
-                lines.append(item.line)
-            elif not next_item.line.startswith(item.line):
-                lines.append(item.line)
-        return lines
-
     def __str__(self):
         if self._device_os == 'junos':
-            return self.to_lines(self.expand(self.items))
-        return self.to_block(self.expand(self.items))
+            return dumps(self.expand_line(self.items), 'lines')
+        return dumps(self.expand_line(self.items))
 
     def load(self, contents):
         self._config = parse(contents, indent=self.indent)
@@ -143,13 +189,28 @@ class NetworkConfig(object):
         self.load(open(filename).read())
 
     def get(self, path):
-        if isinstance(path, basestring):
+        if isinstance(path, string_types):
             path = [path]
         for item in self._config:
             if item.text == path[-1]:
                 parents = [p.text for p in item.parents]
                 if parents == path[:-1]:
                     return item
+
+    def get_object(self, path):
+        for item in self.items:
+            if item.text == path[-1]:
+                parents = [p.text for p in item.parents]
+                if parents == path[:-1]:
+                    return item
+
+    def get_section_objects(self, path):
+        if not isinstance(path, list):
+            path = [path]
+        obj = self.get_object(path)
+        if not obj:
+            raise ValueError('path does not exist in config')
+        return self.expand_section(obj)
 
     def search(self, regexp, path=None):
         regex = re.compile(r'^%s' % regexp, re.M)
@@ -176,7 +237,7 @@ class NetworkConfig(object):
         regexp = r'%s' % regexp
         return re.findall(regexp, str(self))
 
-    def expand(self, objs):
+    def expand_line(self, objs):
         visited = set()
         expanded = list()
         for o in objs:
@@ -188,35 +249,6 @@ class NetworkConfig(object):
             visited.add(o)
         return expanded
 
-    def to_lines(self, section):
-        lines = list()
-        for entry in section[1:]:
-            line = ['set']
-            line.extend([p.text for p in entry.parents])
-            line.append(entry.text)
-            lines.append(' '.join(line))
-        return lines
-
-    def to_block(self, section):
-        return '\n'.join([item.raw for item in section])
-
-    def get_section(self, path):
-        try:
-            section = self.get_section_objects(path)
-            if self._device_os == 'junos':
-                return self.to_lines(section)
-            return self.to_block(section)
-        except ValueError:
-            return list()
-
-    def get_section_objects(self, path):
-        if not isinstance(path, list):
-            path = [path]
-        obj = self.get_object(path)
-        if not obj:
-            raise ValueError('path does not exist in config')
-        return self.expand_section(obj)
-
     def expand_section(self, configobj, S=None):
         if S is None:
             S = list()
@@ -227,74 +259,73 @@ class NetworkConfig(object):
             self.expand_section(child, S)
         return S
 
-    def get_object(self, path):
+    def expand_block(self, objects, visited=None):
+        items = list()
+
+        if not visited:
+            visited = set()
+
+        for o in objects:
+            items.append(o)
+            visited.add(o)
+            for child in o.children:
+                items.extend(self.expand_block([child], visited))
+
+        return items
+
+    def diff_line(self, other):
+        diff = list()
         for item in self.items:
-            if item.text == path[-1]:
-                parents = [p.text for p in item.parents]
-                if parents == path[:-1]:
-                    return item
+            if item not in other.items:
+                diff.append(item)
+        return diff
 
-    def get_children(self, path):
-        obj = self.get_object(path)
-        if obj:
-            return obj.children
+    def diff_strict(self, other):
+        diff = list()
+        for index, item in enumerate(self.items):
+            try:
+                if item != other.items[index]:
+                    diff.append(item)
+            except IndexError:
+                diff.append(item)
+        return diff
 
-    def difference(self, other, path=None, match='line', replace='line'):
-        updates = list()
+    def diff_exact(self, other):
+        diff = list()
+        if len(other.items) != len(self.items):
+            diff.extend(self.items)
+        else:
+            for ours, theirs in itertools.izip(self.items, other.items):
+                if ours != theirs:
+                    diff.extend(self.items)
+                    break
+        return diff
 
-        config = self.items
-        if path:
-            config = self.get_children(path) or list()
 
-        if match == 'line':
-            for item in config:
-                if item not in other.items:
-                    updates.append(item)
-
-        elif match == 'strict':
-            if path:
-                current = other.get_children(path) or list()
-            else:
-                current = other.items
-
-            for index, item in enumerate(config):
-                try:
-                    if item != current[index]:
-                        updates.append(item)
-                except IndexError:
-                    updates.append(item)
-
-        elif match == 'exact':
-            if path:
-                current = other.get_children(path) or list()
-            else:
-                current = other.items
-
-            if len(current) != len(config):
-                updates.extend(config)
-            else:
-                for ours, theirs in itertools.izip(config, current):
-                    if ours != theirs:
-                        updates.extend(config)
-                        break
+    def difference(self, other, match='line', replace='line'):
+        try:
+            func = getattr(self, 'diff_%s' % match)
+            updates = func(other)
+        except AttributeError:
+            raise TypeError('invalid value for match keyword')
 
         if self._device_os == 'junos':
             return updates
 
-        changes = list()
-        for update in updates:
-            if replace == 'block':
-                if update.parents:
-                    changes.append(update.parents[-1])
-                    for child in update.parents[-1].children:
-                        changes.append(child)
+        if replace == 'block':
+            parents = list()
+            for u in updates:
+                if u.parents is None:
+                    if u not in parents:
+                        parents.append(u)
                 else:
-                    changes.append(update)
-            else:
-                changes.append(update)
-        updates = self.expand(changes)
+                    for p in u.parents:
+                        if p not in parents:
+                            parents.append(p)
 
-        return [item.text for item in updates]
+            return self.expand_block(parents)
+
+        return self.expand_line(updates)
 
     def replace(self, patterns, repl, parents=None, add_if_missing=False,
                 ignore_whitespace=True):

@@ -9,8 +9,10 @@ Introduction
 While it is possible to write a playbook in one very large file (and you might start out learning playbooks this way),
 eventually you'll want to reuse files and start to organize things.
 
-At a basic level, including task files allows you to break up bits of configuration policy into smaller files.  Task includes 
-pull in tasks from other files.  Since handlers are tasks too, you can also include handler files from the 'handlers:' section.
+At a basic level, including task files allows you to break up bits of 
+configuration policy into smaller files.  Task includes pull in tasks from other 
+files.  Since handlers are tasks too, you can also include handler files from 
+the 'handler' section.
 
 See :doc:`playbooks` if you need a review of these concepts.
 
@@ -57,8 +59,9 @@ Include directives look like this, and can be mixed in with regular tasks in a p
 
 You can also pass variables into includes.  We call this a 'parameterized include'.
 
-For instance, if deploying multiple wordpress instances, I could
-contain all of my wordpress tasks in a single wordpress.yml file, and use it like so::
+For instance, to deploy to multiple wordpress instances, I could
+encapsulate all of my wordpress tasks in a single wordpress.yml file, and use 
+it like so::
 
    tasks:
      - include: wordpress.yml wp_user=timmy
@@ -190,6 +193,7 @@ This designates the following behaviors, for each role 'x':
 - If roles/x/tasks/main.yml exists, tasks listed therein will be added to the play
 - If roles/x/handlers/main.yml exists, handlers listed therein will be added to the play
 - If roles/x/vars/main.yml exists, variables listed therein will be added to the play
+- If roles/x/defaults/main.yml exists, variables listed therein will be added to the play
 - If roles/x/meta/main.yml exists, any role dependencies listed therein will be added to the list of roles (1.3 and later)
 - Any copy, script, template or include tasks (in the role) can reference files in roles/x/{files,templates,tasks}/ (dir depends on task) without having to path them relatively or absolutely
 
@@ -284,7 +288,7 @@ a list of roles and parameters to insert before the specified role, such as the 
     ---
     dependencies:
       - { role: common, some_parameter: 3 }
-      - { role: apache, appache_port: 80 }
+      - { role: apache, apache_port: 80 }
       - { role: postgres, dbname: blarg, other_parameter: 12 }
 
 Role dependencies can also be specified as a full path, just like top level roles::

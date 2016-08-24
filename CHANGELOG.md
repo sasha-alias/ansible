@@ -7,25 +7,51 @@ Ansible Changes By Release
 
 * Added the `listen` feature for modules. This feature allows tasks to more easily notify multiple handlers, as well as making it easier for handlers from decoupled roles to be notified.
 * Added support for binary modules
+* `raw` now returns `changed: true` to be consistent with shell/command/script modules. Add `changed_when: false` to `raw` tasks to restore the pre-2.2 behavior if necessary. 
 * The service module has been changed to use system specific modules if they exist and fallback to the old service module if they cannot be found or detected.
 * Several Windows facts were modified or renamed for consistency with their Unix counterparts, and many new facts were added. If your playbooks rely on any of the following keys, please ensure they are using the correct key names and/or values:
   - ansible_date_time.date (changed to use yyyy-mm-dd format instead of default system-locale format)
   - ansible_date_time.iso8601 (changed to UTC instead of local time)
   - ansible_distribution (now uses OS caption string, e.g.: "Microsoft Windows Server 2012 R2 Standard", version is still available on ansible_distribution_version)
   - ansible_totalmem (renamed to ansible_memtotal_mb, units changed to MB instead of bytes)
+* Added the ability to specify serial batches as a list (`serial: [1, 5, 10]`), which allows for so-called "canary" actions in one play.
+* Fixed 'local type' plugins and actions to have a more predictable relative path. Fixes a regression of 1.9 (PR #16805). Existing users of 2.x will need to adjust related tasks.
 
 ####New Modules:
+- archive
+- asa
+  * asa_acl
+  * asa_command
+  * asa_config
+  * asa_template
 - aws
   * ec2_customer_gateway
   * ec2_vpc_nacl_facts
+  * ec2_vpc_nat_gateway
   * ec2_vpc_vgw
 - cloudstack
   * cs_router
   * cs_snapshot_policy
+- github_key
+- google
+  * gcdns_record
+  * gcdns_zone
+- ipmi
+  * ipmi_boot
+  * ipmi_power
 - letsencrypt
+- logicmonitor
+- logicmonitor_facts
+- lxd
+  * lxd_profile
+  * lxd_container
 - netconf_config
+- ovh_ip_loadbalancing_backend
 - openstack
   * os_keystone_service
+  * os_recordset
+  * os_stack
+  * os_zone
 - rocketchat
 - sensu_subscription
 - smartos
@@ -33,12 +59,15 @@ Ansible Changes By Release
 - systemd
 - telegram
 - vmware
+  * vmware_guest
+  * vmware_local_user_manager
   * vmware_vmotion
+- wakeonlan
 
 ###Minor Changes:
 * now -vvv shows exact path from which 'currently executing module' was picked up from.
 
-## 2.1 "The Song Remains the Same" - ACTIVE DEVELOPMENT
+## 2.1 "The Song Remains the Same"
 
 ###Major Changes:
 
@@ -47,7 +76,7 @@ Ansible Changes By Release
 * Added new modules for Azure (see below for the full list)
 * Added the ability to specify includes as "static" (either through a configuration option or on a per-include basis). When includes are static,
   they are loaded at compile time and cannot contain dynamic features like loops.
-* Added a new strategy `debug`, which allows per-task debugging of playbooks.
+* Added a new strategy `debug`, which allows per-task debugging of playbooks, for more details see https://docs.ansible.com/ansible/playbooks_debugger.html
 * Added a new option for tasks: `loop_control`. This currently only supports one option - `loop_var`, which allows a different loop variable from `item` to be used.
 * Added the ability to filter facts returned by the fact gathering setup step using the `gather_subset` option on the play or in the ansible.cfg configuration file.
   See http://docs.ansible.com/ansible/intro_configuration.html#gathering for details on the format of the option.

@@ -60,9 +60,10 @@ class Base:
     # flags and misc. settings
     _environment         = FieldAttribute(isa='list')
     _no_log              = FieldAttribute(isa='bool')
-    _always_run           = FieldAttribute(isa='bool')
-    _run_once             = FieldAttribute(isa='bool')
-    _ignore_errors        = FieldAttribute(isa='bool')
+    _always_run          = FieldAttribute(isa='bool')
+    _run_once            = FieldAttribute(isa='bool')
+    _ignore_errors       = FieldAttribute(isa='bool')
+    _check_mode          = FieldAttribute(isa='bool')
 
     # param names which have been deprecated/removed
     DEPRECATED_ATTRIBUTES = [
@@ -77,11 +78,17 @@ class Base:
         self._loader = None
         self._variable_manager = None
 
+        # other internal params
+        self._validated = False
+        self._finalized = False
+
         # every object gets a random uuid:
         self._uuid = uuid.uuid4()
 
         # and initialize the base attributes
         self._initialize_base_attributes()
+
+        self._cached_parent_attrs = dict()
 
         # and init vars, avoid using defaults in field declaration as it lives across plays
         self.vars = dict()
@@ -109,13 +116,21 @@ class Base:
     @staticmethod
     def _generic_g(prop_name, self):
         method = "_get_attr_%s" % prop_name
-        if hasattr(self, method):
+        try:
             value = getattr(self, method)()
-        else:
+        except AttributeError:
             try:
                 value = self._attributes[prop_name]
-                if value is None and hasattr(self, '_get_parent_attribute'):
-                    value = self._get_parent_attribute(prop_name)
+                if value is None and not self._finalized:
+                    try:
+                        if prop_name in self._cached_parent_attrs:
+                            value = self._cached_parent_attrs[prop_name]
+                        else:
+                            value = self._get_parent_attribute(prop_name)
+                            # FIXME: temporarily disabling due to bugs
+                            #self._cached_parent_attrs[prop_name] = value
+                    except AttributeError:
+                        pass
             except KeyError:
                 raise AttributeError("'%s' object has no attribute '%s'" % (self.__class__.__name__, prop_name))
 
@@ -136,8 +151,8 @@ class Base:
         '''
 
         # check cache before retrieving attributes
-        if self.__class__ in BASE_ATTRIBUTES:
-            return BASE_ATTRIBUTES[self.__class__]
+        if self.__class__.__name__ in BASE_ATTRIBUTES:
+            return BASE_ATTRIBUTES[self.__class__.__name__]
 
         # Cache init
         base_attributes = dict()
@@ -146,8 +161,22 @@ class Base:
                 if name.startswith('_'):
                     name = name[1:]
                 base_attributes[name] = value
-        BASE_ATTRIBUTES[self.__class__] = base_attributes
+        BASE_ATTRIBUTES[self.__class__.__name__] = base_attributes
         return base_attributes
+
+    def dump_me(self, depth=0):
+        if depth == 0:
+            print("DUMPING OBJECT ------------------------------------------------------")
+        print("%s- %s (%s, id=%s)" % (" " * depth, self.__class__.__name__, self, id(self)))
+        if hasattr(self, '_parent') and self._parent:
+            self._parent.dump_me(depth+2)
+            dep_chain = self._parent.get_dep_chain()
+            #print("%s^ dep chain: %s" % (" "*(depth+2), dep_chain))
+            if dep_chain:
+                for dep in dep_chain:
+                    dep.dump_me(depth+2)
+        if hasattr(self, '_play') and self._play:
+            self._play.dump_me(depth+2)
 
     def _initialize_base_attributes(self):
         # each class knows attributes set upon it, see Task.py for example
@@ -243,20 +272,25 @@ class Base:
     def validate(self, all_vars=dict()):
         ''' validation that is done at parse time, not load time '''
 
-        # walk all fields in the object
-        for (name, attribute) in iteritems(self._get_base_attributes()):
+        if not self._validated:
+            # walk all fields in the object
+            for (name, attribute) in iteritems(self._get_base_attributes()):
 
-            # run validator only if present
-            method = getattr(self, '_validate_%s' % name, None)
-            if method:
-                method(attribute, name, getattr(self, name))
-            else:
-                # and make sure the attribute is of the type it should be
-                value = getattr(self, name)
-                if value is not None:
-                    if attribute.isa == 'string' and isinstance(value, (list, dict)):
-                        raise AnsibleParserError("The field '%s' is supposed to be a string type,"
-                                " however the incoming data structure is a %s" % (name, type(value)), obj=self.get_ds())
+                # run validator only if present
+                method = getattr(self, '_validate_%s' % name, None)
+                if method:
+                    method(attribute, name, getattr(self, name))
+                else:
+                    # and make sure the attribute is of the type it should be
+                    value = getattr(self, name)
+                    if value is not None:
+                        if attribute.isa == 'string' and isinstance(value, (list, dict)):
+                            raise AnsibleParserError(
+                                "The field '%s' is supposed to be a string type,"
+                                " however the incoming data structure is a %s" % (name, type(value)), obj=self.get_ds()
+                            )
+
+        self._validated = True
 
     def copy(self):
         '''
@@ -274,9 +308,10 @@ class Base:
             else:
                 setattr(new_me, name, attr_val)
 
-        new_me._loader           = self._loader
+        new_me._loader = self._loader
         new_me._variable_manager = self._variable_manager
-
+        new_me._validated = self._validated
+        new_me._finalized = self._finalized
         new_me._uuid = self._uuid
 
         # if the ds value was set on the object, copy it to the new copy too
@@ -394,6 +429,8 @@ class Base:
                 if templar._fail_on_undefined_errors and name != 'name':
                     raise AnsibleParserError("the field '%s' has an invalid value, which appears to include a variable that is undefined."
                             " The error was: %s" % (name,e), obj=self.get_ds())
+
+        self._finalized = True
 
     def serialize(self):
         '''

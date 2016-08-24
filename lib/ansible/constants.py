@@ -28,13 +28,16 @@ from ansible.compat.six.moves import configparser
 
 from ansible.parsing.quoting import unquote
 from ansible.errors import AnsibleOptionsError
+from ansible.utils.path import makedirs_safe
+
+BOOL_TRUE = frozenset([ "true", "t", "y", "1", "yes", "on" ])
 
 # copied from utils, avoid circular reference fun :)
 def mk_boolean(value):
     if value is None:
         return False
     val = str(value)
-    if val.lower() in [ "true", "t", "y", "1", "yes" ]:
+    if val.lower() in BOOL_TRUE:
         return True
     else:
         return False
@@ -75,8 +78,9 @@ def get_config(p, section, key, env_var, default, boolean=False, integer=False, 
         elif istmppath:
             value = shell_expand(value)
             if not os.path.exists(value):
-                os.makedirs(value, 0o700)
-            value = tempfile.mkdtemp(prefix='ansible-local-tmp', dir=value)
+                makedirs_safe(value, 0o700)
+            prefix = 'ansible-local-%s' % os.getpid()
+            value = tempfile.mkdtemp(prefix=prefix, dir=value)
         elif ispathlist:
             if isinstance(value, string_types):
                 value = [shell_expand(x, expand_relative_paths=expand_relative_paths) \
@@ -176,6 +180,7 @@ DEFAULT_JINJA2_EXTENSIONS = get_config(p, DEFAULTS, 'jinja2_extensions', 'ANSIBL
 DEFAULT_EXECUTABLE        = get_config(p, DEFAULTS, 'executable', 'ANSIBLE_EXECUTABLE', '/bin/sh')
 DEFAULT_GATHERING         = get_config(p, DEFAULTS, 'gathering', 'ANSIBLE_GATHERING', 'implicit').lower()
 DEFAULT_GATHER_SUBSET     = get_config(p, DEFAULTS, 'gather_subset', 'ANSIBLE_GATHER_SUBSET', 'all').lower()
+DEFAULT_GATHER_TIMEOUT    = get_config(p, DEFAULTS, 'gather_timeout', 'ANSIBLE_GATHER_TIMEOUT', 10, integer=True)
 DEFAULT_LOG_PATH          = get_config(p, DEFAULTS, 'log_path',           'ANSIBLE_LOG_PATH', '', ispath=True)
 DEFAULT_FORCE_HANDLERS    = get_config(p, DEFAULTS, 'force_handlers', 'ANSIBLE_FORCE_HANDLERS', False, boolean=True)
 DEFAULT_INVENTORY_IGNORE  = get_config(p, DEFAULTS, 'inventory_ignore_extensions', 'ANSIBLE_INVENTORY_IGNORE', ["~", ".orig", ".bak", ".ini", ".cfg", ".retry", ".pyc", ".pyo"], islist=True)

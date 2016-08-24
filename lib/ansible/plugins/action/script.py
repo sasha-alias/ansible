@@ -72,7 +72,7 @@ class ActionModule(ActionBase):
         args   = ' '.join(parts[1:])
 
         try:
-            source = self._find_needle('files', source)
+            source = self._loader.get_real_file(self._find_needle('files', source))
         except AnsibleError as e:
             return dict(failed=True, msg=to_str(e))
 
@@ -81,7 +81,7 @@ class ActionModule(ActionBase):
         self._transfer_file(source, tmp_src)
 
         # set file permissions, more permissive when the copy is done as a different user
-        self._fixup_perms(tmp, remote_user, execute=True, recursive=True)
+        self._fixup_perms((tmp, tmp_src), remote_user, execute=True)
 
         # add preparation steps to one ssh roundtrip executing the script
         env_string = self._compute_environment_string()

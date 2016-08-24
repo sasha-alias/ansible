@@ -26,8 +26,6 @@ import json
 import pipes
 import os
 
-from sys import version_info
-
 try:
     import builtins
 except ImportError:
@@ -65,85 +63,6 @@ powershell_module_replacers = b"""
 WINDOWS_ARGS = "<<INCLUDE_ANSIBLE_MODULE_JSON_ARGS>>"
 # POWERSHELL_COMMON
 """
-
-# Prior to 3.4.4, mock_open cannot handle binary read_data
-if version_info >= (3,) and version_info < (3, 4, 4):
-    file_spec = None
-
-    def _iterate_read_data(read_data):
-        # Helper for mock_open:
-        # Retrieve lines from read_data via a generator so that separate calls to
-        # readline, read, and readlines are properly interleaved
-        sep = b'\n' if isinstance(read_data, bytes) else '\n'
-        data_as_list = [l + sep for l in read_data.split(sep)]
-
-        if data_as_list[-1] == sep:
-            # If the last line ended in a newline, the list comprehension will have an
-            # extra entry that's just a newline.  Remove this.
-            data_as_list = data_as_list[:-1]
-        else:
-            # If there wasn't an extra newline by itself, then the file being
-            # emulated doesn't have a newline to end the last line  remove the
-            # newline that our naive format() added
-            data_as_list[-1] = data_as_list[-1][:-1]
-
-        for line in data_as_list:
-            yield line
-
-    def mock_open(mock=None, read_data=''):
-        """
-        A helper function to create a mock to replace the use of `open`. It works
-        for `open` called directly or used as a context manager.
-
-        The `mock` argument is the mock object to configure. If `None` (the
-        default) then a `MagicMock` will be created for you, with the API limited
-        to methods or attributes available on standard file handles.
-
-        `read_data` is a string for the `read` methoddline`, and `readlines` of the
-        file handle to return.  This is an empty string by default.
-        """
-        def _readlines_side_effect(*args, **kwargs):
-            if handle.readlines.return_value is not None:
-                return handle.readlines.return_value
-            return list(_data)
-
-        def _read_side_effect(*args, **kwargs):
-            if handle.read.return_value is not None:
-                return handle.read.return_value
-            return type(read_data)().join(_data)
-
-        def _readline_side_effect():
-            if handle.readline.return_value is not None:
-                while True:
-                    yield handle.readline.return_value
-            for line in _data:
-                yield line
-
-
-        global file_spec
-        if file_spec is None:
-            import _io
-            file_spec = list(set(dir(_io.TextIOWrapper)).union(set(dir(_io.BytesIO))))
-
-        if mock is None:
-            mock = MagicMock(name='open', spec=open)
-
-        handle = MagicMock(spec=file_spec)
-        handle.__enter__.return_value = handle
-
-        _data = _iterate_read_data(read_data)
-
-        handle.write.return_value = None
-        handle.read.return_value = None
-        handle.readline.return_value = None
-        handle.readlines.return_value = None
-
-        handle.read.side_effect = _read_side_effect
-        handle.readline.side_effect = _readline_side_effect()
-        handle.readlines.side_effect = _readlines_side_effect
-
-        mock.return_value = handle
-        return mock
 
 
 class DerivedActionBase(ActionBase):
@@ -231,7 +150,7 @@ class TestActionBase(unittest.TestCase):
             mock_connection.module_implementation_preferences = ('.ps1',)
             (style, shebang, data, path) = action_base._configure_module('stat', mock_task.args)
             self.assertEqual(style, "new")
-            self.assertEqual(shebang, None)
+            self.assertEqual(shebang, u'#!powershell')
 
             # test module not found
             self.assertRaises(AnsibleError, action_base._configure_module, 'badmodule', mock_task.args)
@@ -577,21 +496,21 @@ class TestActionBase(unittest.TestCase):
         action_base._compute_environment_string.return_value = ''
         action_base._connection.has_pipelining = True
         action_base._low_level_execute_command.return_value = dict(stdout='{"rc": 0, "stdout": "ok"}')
-        self.assertEqual(action_base._execute_module(module_name=None, module_args=None), dict(rc=0, stdout="ok", stdout_lines=['ok']))
-        self.assertEqual(action_base._execute_module(module_name='foo', module_args=dict(z=9, y=8, x=7), task_vars=dict(a=1)), dict(rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(module_name=None, module_args=None), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(module_name='foo', module_args=dict(z=9, y=8, x=7), task_vars=dict(a=1)), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
 
         # test with needing/removing a remote tmp path
         action_base._configure_module.return_value = ('old', '#!/usr/bin/python', 'this is the module data', 'path')
         action_base._late_needs_tmp_path.return_value = True
         action_base._make_tmp_path.return_value = '/the/tmp/path'
-        self.assertEqual(action_base._execute_module(), dict(rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
 
         action_base._configure_module.return_value = ('non_native_want_json', '#!/usr/bin/python', 'this is the module data', 'path')
-        self.assertEqual(action_base._execute_module(), dict(rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
 
         play_context.become = True
         play_context.become_user = 'foo'
-        self.assertEqual(action_base._execute_module(), dict(rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
 
         # test an invalid shebang return
         action_base._configure_module.return_value = ('new', '', 'this is the module data', 'path')
@@ -602,13 +521,15 @@ class TestActionBase(unittest.TestCase):
         # mode and once with support disabled to raise an error
         play_context.check_mode = True
         action_base._configure_module.return_value = ('new', '#!/usr/bin/python', 'this is the module data', 'path')
-        self.assertEqual(action_base._execute_module(), dict(rc=0, stdout="ok", stdout_lines=['ok']))
+        self.assertEqual(action_base._execute_module(), dict(_ansible_parsed=True, rc=0, stdout="ok", stdout_lines=['ok']))
         action_base._supports_check_mode = False
         self.assertRaises(AnsibleError, action_base._execute_module)
 
     def test_action_base_sudo_only_if_user_differs(self):
+        fake_loader = MagicMock()
+        fake_loader.get_basedir.return_value = os.getcwd()
         play_context = PlayContext()
-        action_base = DerivedActionBase(None, None, play_context, None, None, None)
+        action_base = DerivedActionBase(None, None, play_context, fake_loader, None, None)
         action_base._connection = MagicMock(exec_command=MagicMock(return_value=(0, '', '')))
         action_base._connection._shell = MagicMock(append_command=MagicMock(return_value=('JOINED CMD')))
 

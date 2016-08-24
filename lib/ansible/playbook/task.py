@@ -19,6 +19,8 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+import os
+
 from ansible.compat.six import iteritems, string_types
 
 from ansible.errors import AnsibleError, AnsibleParserError
@@ -90,9 +92,13 @@ class Task(Base, Conditional, Taggable, Become):
     def __init__(self, block=None, role=None, task_include=None):
         ''' constructors a task, without the Task.load classmethod, it will be pretty blank '''
 
-        self._block        = block
-        self._role         = role
-        self._task_include = task_include
+        self._role   = role
+        self._parent = None
+
+        if task_include:
+            self._parent = task_include
+        else:
+            self._parent = block
 
         super(Task, self).__init__()
 
@@ -240,10 +246,8 @@ class Task(Base, Conditional, Taggable, Become):
         the block and task include (if any) to which this task belongs.
         '''
 
-        if self._block:
-            self._block.post_validate(templar)
-        if self._task_include:
-            self._task_include.post_validate(templar)
+        if self._parent:
+            self._parent.post_validate(templar)
 
         super(Task, self).post_validate(templar)
 
@@ -302,10 +306,8 @@ class Task(Base, Conditional, Taggable, Become):
 
     def get_vars(self):
         all_vars = dict()
-        if self._block:
-            all_vars.update(self._block.get_vars())
-        if self._task_include:
-            all_vars.update(self._task_include.get_vars())
+        if self._parent:
+            all_vars.update(self._parent.get_vars())
 
         all_vars.update(self.vars)
 
@@ -318,55 +320,55 @@ class Task(Base, Conditional, Taggable, Become):
 
     def get_include_params(self):
         all_vars = dict()
-        if self._task_include:
-            all_vars.update(self._task_include.get_include_params())
+        if self._parent:
+            all_vars.update(self._parent.get_include_params())
         if self.action == 'include':
             all_vars.update(self.vars)
         return all_vars
 
-    def copy(self, exclude_block=False):
+    def copy(self, exclude_parent=False, exclude_tasks=False):
         new_me = super(Task, self).copy()
 
-        new_me._block = None
-        if self._block and not exclude_block:
-            new_me._block = self._block.copy()
+        new_me._parent = None
+        if self._parent and not exclude_parent:
+            new_me._parent = self._parent.copy(exclude_tasks=exclude_tasks)
 
         new_me._role = None
         if self._role:
             new_me._role = self._role
-
-        new_me._task_include = None
-        if self._task_include:
-            new_me._task_include = self._task_include.copy(exclude_block=exclude_block)
 
         return new_me
 
     def serialize(self):
         data = super(Task, self).serialize()
 
-        if self._block:
-            data['block'] = self._block.serialize()
+        if self._parent:
+            data['parent'] = self._parent.serialize()
+            data['parent_type'] = self._parent.__class__.__name__
 
         if self._role:
             data['role'] = self._role.serialize()
-
-        if self._task_include:
-            data['task_include'] = self._task_include.serialize()
 
         return data
 
     def deserialize(self, data):
 
         # import is here to avoid import loops
-        #from ansible.playbook.task_include import TaskInclude
+        from ansible.playbook.task_include import TaskInclude
+        from ansible.playbook.handler_task_include import HandlerTaskInclude
 
-        block_data = data.get('block')
-
-        if block_data:
-            b = Block()
-            b.deserialize(block_data)
-            self._block = b
-            del data['block']
+        parent_data = data.get('parent', None)
+        if parent_data:
+            parent_type = data.get('parent_type')
+            if parent_type == 'Block':
+                p = Block()
+            elif parent_type == 'TaskInclude':
+                p = TaskInclude()
+            elif parent_type == 'HandlerTaskInclude':
+                p = HandlerTaskInclude()
+            p.deserialize(parent_data)
+            self._parent = p
+            del data['parent']
 
         role_data = data.get('role')
         if role_data:
@@ -375,22 +377,11 @@ class Task(Base, Conditional, Taggable, Become):
             self._role = r
             del data['role']
 
-        ti_data = data.get('task_include')
-        if ti_data:
-            #ti = TaskInclude()
-            ti = Task()
-            ti.deserialize(ti_data)
-            self._task_include = ti
-            del data['task_include']
-
         super(Task, self).deserialize(data)
 
     def evaluate_conditional(self, templar, all_vars):
-        if self._block is not None:
-            if not self._block.evaluate_conditional(templar, all_vars):
-                return False
-        if self._task_include is not None:
-            if not self._task_include.evaluate_conditional(templar, all_vars):
+        if self._parent is not None:
+            if not self._parent.evaluate_conditional(templar, all_vars):
                 return False
         return super(Task, self).evaluate_conditional(templar, all_vars)
 
@@ -403,10 +394,8 @@ class Task(Base, Conditional, Taggable, Become):
 
         self._loader = loader
 
-        if self._block:
-            self._block.set_loader(loader)
-        if self._task_include:
-            self._task_include.set_loader(loader)
+        if self._parent:
+            self._parent.set_loader(loader)
 
     def _get_parent_attribute(self, attr, extend=False):
         '''
@@ -416,14 +405,8 @@ class Task(Base, Conditional, Taggable, Become):
         try:
             value = self._attributes[attr]
 
-            if self._block and (value is None or extend):
-                parent_value = getattr(self._block, attr, None)
-                if extend:
-                    value = self._extend_value(value, parent_value)
-                else:
-                    value = parent_value
-            if self._task_include and (value is None or extend):
-                parent_value = getattr(self._task_include, attr, None)
+            if self._parent and (value is None or extend):
+                parent_value = getattr(self._parent, attr, None)
                 if extend:
                     value = self._extend_value(value, parent_value)
                 else:
@@ -454,3 +437,34 @@ class Task(Base, Conditional, Taggable, Become):
 
     def _get_attr_loop_control(self):
         return self._attributes['loop_control']
+
+    def get_dep_chain(self):
+        if self._parent:
+            return self._parent.get_dep_chain()
+        else:
+            return None
+
+    def get_search_path(self):
+        '''
+        Return the list of paths you should search for files, in order.
+        This follows role/playbook dependency chain.
+        '''
+        path_stack = []
+
+        dep_chain =  self.get_dep_chain()
+        # inside role: add the dependency chain from current to dependant
+        if dep_chain:
+            path_stack.extend(reversed([x._role_path for x in dep_chain]))
+
+        # add path of task itself, unless it is already in the list
+        task_dir = os.path.dirname(self.get_path())
+        if task_dir not in path_stack:
+            path_stack.append(task_dir)
+
+        return path_stack
+
+    def all_parents_static(self):
+        if self._parent:
+            return self._parent.all_parents_static()
+        return True
+

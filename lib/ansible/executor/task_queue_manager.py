@@ -26,7 +26,6 @@ import tempfile
 from ansible import constants as C
 from ansible.errors import AnsibleError
 from ansible.executor.play_iterator import PlayIterator
-from ansible.executor.process.result import ResultProcess
 from ansible.executor.stats import AggregateStats
 from ansible.playbook.block import Block
 from ansible.playbook.play_context import PlayContext
@@ -34,6 +33,7 @@ from ansible.plugins import callback_loader, strategy_loader, module_loader
 from ansible.template import Templar
 from ansible.vars.hostvars import HostVars
 from ansible.plugins.callback import CallbackBase
+from ansible.utils.helpers import pct_to_int
 from ansible.utils.unicode import to_unicode
 from ansible.compat.six import string_types
 
@@ -61,8 +61,8 @@ class TaskQueueManager:
     RUN_OK                = 0
     RUN_ERROR             = 1
     RUN_FAILED_HOSTS      = 2
-    RUN_UNREACHABLE_HOSTS = 3
-    RUN_FAILED_BREAK_PLAY = 4
+    RUN_UNREACHABLE_HOSTS = 4
+    RUN_FAILED_BREAK_PLAY = 8
     RUN_UNKNOWN_ERROR     = 255
 
     def __init__(self, inventory, variable_manager, loader, options, passwords, stdout_callback=None, run_additional_callbacks=True, run_tree=False):
@@ -80,7 +80,6 @@ class TaskQueueManager:
         self._callbacks_loaded = False
         self._callback_plugins = []
         self._start_at_done    = False
-        self._result_prc       = None
 
         # make sure the module path (if specified) is parsed and
         # added to the module_loader object
@@ -112,19 +111,12 @@ class TaskQueueManager:
             rslt_q = multiprocessing.Queue()
             self._workers.append([None, rslt_q])
 
-        self._result_prc = ResultProcess(self._final_q, self._workers)
-        self._result_prc.start()
-
     def _initialize_notified_handlers(self, play):
         '''
         Clears and initializes the shared notified handlers dict with entries
         for each handler in the play, which is an empty array that will contain
         inventory hostnames for those hosts triggering the handler.
         '''
-
-        handlers = play.handlers
-        for role in play.roles:
-            handlers.extend(role._handler_blocks)
 
         # Zero the dictionary first by removing any entries there.
         # Proxied dicts don't support iteritems, so we have to use keys()
@@ -141,7 +133,7 @@ class TaskQueueManager:
             return temp_list
 
         handler_list = []
-        for handler_block in handlers:
+        for handler_block in play.handlers:
             handler_list.extend(_process_block(handler_block))
 
         # then initialize it with the given handler list
@@ -220,6 +212,7 @@ class TaskQueueManager:
 
         new_play = play.copy()
         new_play.post_validate(templar)
+        new_play.handlers = new_play.compile_roles_handlers() + new_play.handlers
 
         self.hostvars = HostVars(
             inventory=self._inventory,
@@ -228,8 +221,19 @@ class TaskQueueManager:
         )
 
         # Fork # of forks, # of hosts or serial, whichever is lowest
-        contenders =  [self._options.forks, play.serial, len(self._inventory.get_hosts(new_play.hosts))]
-        contenders =  [ v for v in contenders if v is not None and v > 0 ]
+        num_hosts = len(self._inventory.get_hosts(new_play.hosts))
+
+        max_serial = 0
+        if play.serial:
+            # the play has not been post_validated here, so we may need
+            # to convert the scalar value to a list at this point
+            serial_items = play.serial
+            if not isinstance(serial_items, list):
+                serial_items = [serial_items]
+            max_serial = max([pct_to_int(x, num_hosts) for x in serial_items])
+
+        contenders =  [self._options.forks, max_serial, num_hosts]
+        contenders =  [v for v in contenders if v is not None and v > 0]
         self._initialize_processes(min(contenders))
 
         play_context = PlayContext(new_play, self._options, self.passwords, self._connection_lockfile.fileno())
@@ -290,9 +294,7 @@ class TaskQueueManager:
         self._cleanup_processes()
 
     def _cleanup_processes(self):
-        if self._result_prc:
-            self._result_prc.terminate()
-
+        if hasattr(self, '_workers'):
             for (worker_prc, rslt_q) in self._workers:
                 rslt_q.close()
                 if worker_prc and worker_prc.is_alive():
@@ -318,6 +320,18 @@ class TaskQueueManager:
 
     def terminate(self):
         self._terminated = True
+
+    def has_dead_workers(self):
+
+        # [<WorkerProcess(WorkerProcess-2, stopped[SIGKILL])>,
+        # <WorkerProcess(WorkerProcess-2, stopped[SIGTERM])>
+
+        defunct = False
+        for idx,x in enumerate(self._workers):
+            if hasattr(x[0], 'exitcode'):
+                if x[0].exitcode in [-9, -15]:
+                    defunct = True
+        return defunct
 
     def send_callback(self, method_name, *args, **kwargs):
         for callback_plugin in [self._stdout_callback] + self._callback_plugins:
