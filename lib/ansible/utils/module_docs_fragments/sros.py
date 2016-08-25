@@ -30,14 +30,14 @@ options:
     required: true
   port:
     description:
-      - Specifies the port to use when buiding the connection to the remote
+      - Specifies the port to use when building the connection to the remote
         device.  The port value will default to the well known SSH port
         of 22
     required: false
     default: 22
   username:
     description:
-      - Configures the usename to use to authenticate the connection to
+      - Configures the username to use to authenticate the connection to
         the remote device.  The value of I(username) is used to authenticate
         the SSH session. If the value is not specified in the task, the
         value of environment variable ANSIBLE_NET_USERNAME will be used instead.
@@ -58,24 +58,6 @@ options:
         in the task, the value of environment variable ANSIBLE_NET_SSH_KEYFILE
         will be used instead.
     required: false
-  authorize:
-    description:
-      - Instructs the module to enter priviledged mode on the remote device
-        before sending any commands.  If not specified, the device will
-        attempt to excecute all commands in non-priviledged mode. If the value
-        is not specified in the task, the value of environment variable
-        ANSIBLE_NET_AUTHORIZE will be used instead.
-    required: false
-    default: no
-    choices: ['yes', 'no']
-  auth_pass:
-    description:
-      - Specifies the password to use if required to enter privileged mode
-        on the remote device.  If I(authorize) is false, then this argument
-        does nothing. If the value is not specified in the task, the value of
-        environment variable ANSIBLE_NET_AUTH_PASS will be used instead.
-    required: false
-    default: none
   timeout:
     description:
       - Specifies idle timeout for the connection. Useful if the console
@@ -84,9 +66,10 @@ options:
     default: 10
   provider:
     description:
-      - Convience method that allows all M(ios) arguments to be passed as
-        a dict object.  All constraints (required, choices, etc) must be
-        met either by individual arguments or values in this dict.
+      - Convenience argument that allows connection arguments to be passed as
+        a dict object.  These include C(host), C(port), C(username), C(password),
+        C(ssh_keyfile), and C(timeout). All constraints (required, choices,
+        etc) must be met either by individual arguments or values in this dict.
     required: false
     default: null
 """

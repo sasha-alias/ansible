@@ -26,14 +26,14 @@
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
+import itertools
 import re
-import time
-import itertools
 import shlex
-import itertools
+import time
 
 from ansible.module_utils.basic import BOOLEANS_TRUE, BOOLEANS_FALSE
 from ansible.module_utils.six import string_types
+from ansible.module_utils.six.moves import zip_longest
 
 DEFAULT_COMMENT_TOKENS = ['#', '!', '/*', '*/']
 
@@ -75,8 +75,7 @@ class ConfigLine(object):
 
     @property
     def line(self):
-        line = ['set']
-        line.extend([p.text for p in self.parents])
+        line = [p.text for p in self.parents]
         line.append(self.text)
         return ' '.join(line)
 
@@ -84,8 +83,7 @@ class ConfigLine(object):
         return self.raw
 
     def __eq__(self, other):
-        if self.text == other.text:
-            return self.parents == other.parents
+        return self.line == other.line
 
     def __ne__(self, other):
         return not self.__eq__(other)
@@ -98,7 +96,7 @@ def ignore_line(text, tokens=None):
 def get_next(iterable):
     item, next_item = itertools.tee(iterable, 2)
     next_item = itertools.islice(next_item, 1, None)
-    return itertools.izip_longest(item, next_item)
+    return zip_longest(item, next_item)
 
 def parse(lines, indent, comment_tokens=None):
     toplevel = re.compile(r'\S')
@@ -183,7 +181,13 @@ class NetworkConfig(object):
         return dumps(self.expand_line(self.items))
 
     def load(self, contents):
-        self._config = parse(contents, indent=self.indent)
+        # Going to start adding device profiles post 2.2
+        tokens = list(DEFAULT_COMMENT_TOKENS)
+        if self._device_os == 'sros':
+            tokens.append('echo')
+            self._config = parse(contents, indent=4, comment_tokens=tokens)
+        else:
+            self._config = parse(contents, indent=self.indent)
 
     def load_from_file(self, filename):
         self.load(open(filename).read())

@@ -5,15 +5,17 @@
 # to the complete work.
 #
 # Copyright (c) 2016 Peter Sprygada, <psprygada@ansible.com>
-# Copyright (c) 2016 Patrick Ogenstad, <@ogenstad>
 #
-# Redistribution and use in source and binary forms, with or without modification,
+# Redistribution and use in source and binary forms, with or without
+# modification,
 # are permitted provided that the following conditions are met:
 #
 #    * Redistributions of source code must retain the above copyright
 #      notice, this list of conditions and the following disclaimer.
-#    * Redistributions in binary form must reproduce the above copyright notice,
-#      this list of conditions and the following disclaimer in the documentation
+#    * Redistributions in binary form must reproduce the above copyright
+#    notice,
+#      this list of conditions and the following disclaimer in the
+#      documentation
 #      and/or other materials provided with the distribution.
 #
 # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
@@ -26,20 +28,18 @@
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-
 import re
 
-from ansible.module_utils.network import add_argument, register_transport, to_list
+from ansible.module_utils.network import NetworkModule, NetworkError
+from ansible.module_utils.network import register_transport, to_list
 from ansible.module_utils.shell import CliBase
-
-# temporary fix until modules are update.  to be removed before 2.2 final
-from ansible.module_utils.network import get_module
-
-add_argument('show_command', dict(default='show running-config', choices=['show running-config', 'more system:running-config']))
-add_argument('context', dict(required=False))
+from ansible.module_utils.netcli import Command
 
 
 class Cli(CliBase):
+
+    NET_PASSWD_RE = re.compile(r"[\r\n]?password: $", re.I)
+
     CLI_PROMPTS_RE = [
         re.compile(r"[\r\n]?[\w+\-\.:\/\[\]]+(?:\([^\)]+\)){,3}(?:>|#) ?$"),
         re.compile(r"\[\w+\@[\w\-\.]+(?: [^\]])\] ?[>#\$] ?$")
@@ -49,49 +49,42 @@ class Cli(CliBase):
         re.compile(r"% ?Error"),
         re.compile(r"% ?Bad secret"),
         re.compile(r"invalid input", re.I),
-        re.compile(r"is not valid", re.I),
         re.compile(r"(?:incomplete|ambiguous) command", re.I),
         re.compile(r"connection timed out", re.I),
         re.compile(r"[^\r\n]+ not found", re.I),
         re.compile(r"'[^']' +returned error code: ?\d+"),
     ]
 
-    NET_PASSWD_RE = re.compile(r"[\r\n]?password: $", re.I)
-
-    def __init__(self, *args, **kwargs):
-        super(Cli, self).__init__(*args, **kwargs)
-        self.filter = None
-
     def connect(self, params, **kwargs):
         super(Cli, self).connect(params, kickstart=False, **kwargs)
-        self.execute('no terminal pager')
+        self.shell.send('environment no more')
+        self._connected = True
 
-        if params['context']:
-            self.change_context(params, **kwargs)
+    ### implementation of netcli.Cli ###
 
-    def change_context(self, params, **kwargs):
-        context = params['context']
-        if context == 'system':
-            command = 'changeto system'
-        else:
-            command = 'changeto context %s' % context
+    def run_commands(self, commands, **kwargs):
+        return self.execute(to_list(commands))
 
-        self.execute(command)
+    ### implementation of netcfg.Config ###
 
-    ### Config methods ###
-
-    def configure(self, commands):
-        cmds = ['configure terminal']
-        cmds.extend(to_list(commands))
+    def configure(self, commands, **kwargs):
+        cmds = to_list(commands)
         responses = self.execute(cmds)
-        return responses[1:]
+        self.execute(['exit all'])
+        return responses
 
-    def get_config(self, params, **kwargs):
-        if self.filter:
-            cmd = 'show running-config %s ' % self.filter
-        else:
-            cmd = params['show_command']
-        if params.get('include_defaults'):
-            cmd += ' all'
-        return self.execute(cmd)
+    def get_config(self, detail=False, **kwargs):
+        cmd = 'admin display-config'
+        if detail:
+            cmd += ' detail'
+        return self.execute(cmd)[0]
+
+    def load_config(self, commands, **kwargs):
+        return self.configure(commands)
+
+    def save_config(self):
+        self.execute(['admin save'])
+
 Cli = register_transport('cli', default=True)(Cli)
+
+
