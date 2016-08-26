@@ -139,7 +139,7 @@ from ansible.module_utils.pycompat24 import get_exception, literal_eval
 from ansible.module_utils.six import (PY2, PY3, b, binary_type, integer_types,
         iteritems, text_type, string_types)
 from ansible.module_utils.six.moves import map, reduce
-from ansible.module_utils._text import to_native
+from ansible.module_utils._text import to_native, to_bytes, to_text
 
 _NUMBERTYPES = tuple(list(integer_types) + [float])
 
@@ -218,7 +218,7 @@ def get_distribution():
     ''' return the distribution name '''
     if platform.system() == 'Linux':
         try:
-            supported_dists = platform._supported_dists + ('arch',)
+            supported_dists = platform._supported_dists + ('arch','alpine')
             distribution = platform.linux_distribution(supported_dists=supported_dists)[0].capitalize()
             if not distribution and os.path.isfile('/etc/system-release'):
                 distribution = platform.linux_distribution(supported_dists=['system'])[0].capitalize()
@@ -1013,10 +1013,10 @@ class AnsibleModule(object):
             if diff is not None:
                 if 'before' not in diff:
                     diff['before'] = {}
-                diff['before']['mode'] = oct(prev_mode)
+                diff['before']['mode'] = '0%03o' % prev_mode
                 if 'after' not in diff:
                     diff['after'] = {}
-                diff['after']['mode'] = oct(mode)
+                diff['after']['mode'] = '0%03o' % mode
 
             if self.check_mode:
                 return True
@@ -1944,55 +1944,59 @@ class AnsibleModule(object):
                 dest_dir = os.path.dirname(dest)
                 dest_file = os.path.basename(dest)
                 try:
-                    tmp_dest = tempfile.NamedTemporaryFile(
+                    tmp_dest_fd, tmp_dest_name = tempfile.mkstemp(
                         prefix=".ansible_tmp", dir=dest_dir, suffix=dest_file)
                 except (OSError, IOError):
                     e = get_exception()
                     self.fail_json(msg='The destination directory (%s) is not writable by the current user. Error was: %s' % (dest_dir, e))
 
-                try: # leaves tmp file behind when sudo and  not root
-                    if switched_user and os.getuid() != 0:
-                        # cleanup will happen by 'rm' of tempdir
-                        # copy2 will preserve some metadata
-                        shutil.copy2(src, tmp_dest.name)
-                    else:
-                        shutil.move(src, tmp_dest.name)
-                    if self.selinux_enabled():
-                        self.set_context_if_different(
-                            tmp_dest.name, context, False)
+                try:
                     try:
-                        tmp_stat = os.stat(tmp_dest.name)
-                        if dest_stat and (tmp_stat.st_uid != dest_stat.st_uid or tmp_stat.st_gid != dest_stat.st_gid):
-                            os.chown(tmp_dest.name, dest_stat.st_uid, dest_stat.st_gid)
-                    except OSError:
-                        e = get_exception()
-                        if e.errno != errno.EPERM:
-                            raise
-                    os.rename(tmp_dest.name, dest)
-                except (shutil.Error, OSError, IOError):
-                    e = get_exception()
-                    # sadly there are some situations where we cannot ensure atomicity, but only if
-                    # the user insists and we get the appropriate error we update the file unsafely
-                    if unsafe_writes and e.errno == errno.EBUSY:
-                        #TODO: issue warning that this is an unsafe operation, but doing it cause user insists
+                        # close tmp file handle before file operations to prevent text file busy errors on vboxfs synced folders (windows host)
+                        os.close(tmp_dest_fd)
+                        # leaves tmp file behind when sudo and  not root
+                        if switched_user and os.getuid() != 0:
+                            # cleanup will happen by 'rm' of tempdir
+                            # copy2 will preserve some metadata
+                            shutil.copy2(src, tmp_dest_name)
+                        else:
+                            shutil.move(src, tmp_dest_name)
+                        if self.selinux_enabled():
+                            self.set_context_if_different(
+                                tmp_dest_name, context, False)
                         try:
-                            try:
-                                out_dest = open(dest, 'wb')
-                                in_src = open(src, 'rb')
-                                shutil.copyfileobj(in_src, out_dest)
-                            finally: # assuring closed files in 2.4 compatible way
-                                if out_dest:
-                                    out_dest.close()
-                                if in_src:
-                                    in_src.close()
-                        except (shutil.Error, OSError, IOError):
+                            tmp_stat = os.stat(tmp_dest_name)
+                            if dest_stat and (tmp_stat.st_uid != dest_stat.st_uid or tmp_stat.st_gid != dest_stat.st_gid):
+                                os.chown(tmp_dest_name, dest_stat.st_uid, dest_stat.st_gid)
+                        except OSError:
                             e = get_exception()
-                            self.fail_json(msg='Could not write data to file (%s) from (%s): %s' % (dest, src, e))
+                            if e.errno != errno.EPERM:
+                                raise
+                        os.rename(tmp_dest_name, dest)
+                    except (shutil.Error, OSError, IOError):
+                        e = get_exception()
+                        # sadly there are some situations where we cannot ensure atomicity, but only if
+                        # the user insists and we get the appropriate error we update the file unsafely
+                        if unsafe_writes and e.errno == errno.EBUSY:
+                            #TODO: issue warning that this is an unsafe operation, but doing it cause user insists
+                            try:
+                                try:
+                                    out_dest = open(dest, 'wb')
+                                    in_src = open(src, 'rb')
+                                    shutil.copyfileobj(in_src, out_dest)
+                                finally: # assuring closed files in 2.4 compatible way
+                                    if out_dest:
+                                        out_dest.close()
+                                    if in_src:
+                                        in_src.close()
+                            except (shutil.Error, OSError, IOError):
+                                e = get_exception()
+                                self.fail_json(msg='Could not write data to file (%s) from (%s): %s' % (dest, src, e))
 
-                    else:
-                        self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
-
-                    self.cleanup(tmp_dest.name)
+                        else:
+                            self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
+                finally:
+                    self.cleanup(tmp_dest_name)
 
         if creating:
             # make sure the file has the correct permissions
@@ -2039,13 +2043,13 @@ class AnsibleModule(object):
                 shell = True
         elif isinstance(args, (binary_type, text_type)) and use_unsafe_shell:
             shell = True
-        elif isinstance(args, string_types):
+        elif isinstance(args, (binary_type, text_type)):
             # On python2.6 and below, shlex has problems with text type
             # On python3, shlex needs a text type.
-            if PY2 and isinstance(args, text_type):
-                args = args.encode('utf-8')
-            elif PY3 and isinstance(args, binary_type):
-                args = args.decode('utf-8', errors='surrogateescape')
+            if PY2:
+                args = to_bytes(args)
+            elif PY3:
+                args = to_text(args, errors='surrogateescape')
             args = shlex.split(args)
         else:
             msg = "Argument 'args' to run_command must be list or string"
@@ -2055,9 +2059,9 @@ class AnsibleModule(object):
         if prompt_regex:
             if isinstance(prompt_regex, text_type):
                 if PY3:
-                    prompt_regex = prompt_regex.encode('utf-8', errors='surrogateescape')
+                    prompt_regex = to_bytes(prompt_regex, errors='surrogateescape')
                 elif PY2:
-                    prompt_regex = prompt_regex.encode('utf-8')
+                    prompt_regex = to_bytes(prompt_regex)
             try:
                 prompt_re = re.compile(prompt_regex, re.MULTILINE)
             except re.error:
@@ -2065,7 +2069,7 @@ class AnsibleModule(object):
 
         # expand things like $HOME and ~
         if not shell:
-            args = [ os.path.expandvars(os.path.expanduser(x)) for x in args if x is not None ]
+            args = [ os.path.expanduser(os.path.expandvars(x)) for x in args if x is not None ]
 
         rc = 0
         msg = None
