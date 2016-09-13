@@ -13,42 +13,41 @@ factors that make it harder to port them than most code:
 Which version of Python-3.x and which version of Python-2.x are our minimums?
 =============================================================================
 
-The short answer is Python-3.4 and Python-2.4 but please read on for more
+The short answer is Python-3.5 and Python-2.4 but please read on for more
 information.
 
-For Python-3 we are currently using Python-3.4 as a minimum.  However, no long
-term supported Linux distributions currently ship with Python-3.  When that
-occurs, we will probably take that as our minimum Python-3 version rather than
-Python-3.4.  Thus far, Python-3 has been adding small changes that make it
-more compatible with Python-2 in its newer versions (For instance, Python-3.5
-added the ability to use percent-formatted byte strings.) so it should be more
-pleasant to use a newer version of Python-3 if it's available.  At some point
-this will change but we'll just have to cross that bridge when we get to it.
+For Python-3 we are currently using Python-3.5 as a minimum on both the
+controller and the managed nodes.  This was chosen as it's the version of
+Python3 in Ubuntu-16.04, the first long-term support (LTS) distribution to
+ship with Python3 and not Python2.  Much of our code would still work with
+Python-3.4 but there are always bugfixes and new features in any new upstream
+release.  Taking advantage of this relatively new version allows us not to
+worry about workarounds for problems and missing features in that older
+version.
 
-For Python-2 the default is for modules to run on Python-2.4.  This allows
-users with older distributions that are stuck on Python-2.4 to manage their
-machines.  Modules are allowed to drop support for Python-2.4 when one of
-their dependent libraries require a higher version of python.  This is not an
-invitation to add unnecessary dependent libraries in order to force your
-module to be usable only with a newer version of Python.  Instead it is an
-acknowledgment that some libraries (for instance, boto3 and docker-py) will
-only function with newer Python.
+For Python-2, the default is for the controller to run on Python-2.6 and
+modules to run on Python-2.4.  This allows users with older distributions that
+are stuck on Python-2.4 to manage their machines.  Modules are allowed to drop
+support for Python-2.4 when one of their dependent libraries require a higher
+version of python.  This is not an invitation to add unnecessary dependent
+libraries in order to force your module to be usable only with a newer version
+of Python.  Instead it is an acknowledgment that some libraries (for instance,
+boto3 and docker-py) will only function with newer Python.
 
 .. note:: When will we drop support for Python-2.4?
 
     The only long term supported distro that we know of with Python-2.4 is
-    RHEL5 (and its rebuilds like CentOS5)  which is supported until April of
-    2017.  We will likely end our support for Python-2.4 in modules in an
-    Ansible release around that time.  We know of no long term supported
-    distributions with Python-2.5 so the new minimum Python-2 version will
-    likely be Python-2.6.  This will let us take advantage of the
-    forwards-compat features of Python-2.6 so porting and maintainance of
-    Python-2/Python-3 code will be easier after that.
+    RHEL5 (and its rebuilds like CentOS5) which is supported until April of
+    2017.  Whatever major release we make in or after April of 2017 (probably
+    2.4.0) will no longer have support for Python-2.4 on the managed machines.
+    Previous major release series's that we support (2.3.x)  will continue to
+    support Python-2.4 on the managed nodes.
 
-.. note:: Ubuntu 16 LTS ships with Python 3.5
+    We know of no long term supported distributions with Python-2.5 so the new
+    minimum Python-2 version will be Python-2.6.  This will let us take
+    advantage of the forwards-compat features of Python-2.6 so porting and
+    maintainance of Python-2/Python-3 code will be easier after that.
 
-    We have ongoing discussions now about taking Python3-3.5 as our minimum
-    Python3 version.
 
 Supporting only Python-2 or only Python-3
 =========================================
@@ -152,7 +151,7 @@ dealing with file permissions.  (With file permissions a user may be feeding
 the mode into another program or to another module which doesn't understand
 the python syntax for octal numbers.  ``[zero][digit][digit][digit]`` is
 understood by most everything and therefore the right way to express octals in
-these cisrcumstances.
+these circumstances.
 
 Bundled six
 -----------
@@ -216,6 +215,28 @@ Python3.  We'll need to gather experience to see if this is going to work out
 well for modules as well or if we should give the module_utils API explicit
 switches so that modules can choose to operate with text type all of the time.
 
+Helpers
+~~~~~~~
+
+For converting between bytes, text, and native strings we have three helper
+functions.  These are :func:`ansible.module_utils._text.to_bytes`,
+:func:`ansible.module_utils._text.to_native`, and
+:func:`ansible.module_utils._text.to_text`.  These are similar to using
+``bytes.decode()`` and ``unicode.encode()`` with a few differences.
+
+* By default they try very hard not to traceback.
+* The default encoding is "utf-8"
+* There are two error strategies that don't correspond one-to-one with
+  a python codec error handler.  These are ``surrogate_or_strict`` and
+  ``surrogate_or_replace``.  ``surrogate_or_strict`` will use the ``surrogateescape``
+  error handler if available (mostly on python3) or strict if not.  It is most
+  appropriate to use when dealing with something that needs to round trip its
+  value like file paths database keys, etc.  Without ``surrogateescape`` the best
+  thing these values can do is generate a traceback that our code can catch
+  and decide how to show an error message.  ``surrogate_or_replace`` is for
+  when a value is going to be displayed to the user.  If the
+  ``surrogateescape`` error handler is not present, it will replace
+  undecodable byte sequences with a replacement character.
 
 ================================
 Porting Core Ansible to Python 3

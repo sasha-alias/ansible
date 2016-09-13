@@ -20,10 +20,11 @@ __metaclass__ = type
 
 import os
 
+from ansible.errors import AnsibleError
+from ansible.module_utils._text import to_native
 from ansible.plugins.action import ActionBase
 from ansible.utils.boolean import boolean
-from ansible.errors import AnsibleError
-from ansible.utils.unicode import to_str
+
 
 class ActionModule(ActionBase):
 
@@ -66,9 +67,7 @@ class ActionModule(ActionBase):
             # do not run the command if the line contains creates=filename
             # and the filename already exists. This allows idempotence
             # of command executions.
-            result = self._execute_module(module_name='stat', module_args=dict(path=creates), task_vars=task_vars)
-            stat = result.get('stat', None)
-            if stat and stat.get('exists', False):
+            if self._remote_file_exists(creates):
                 result['skipped'] = True
                 result['msg'] = "skipped, since %s exists" % creates
                 self._remove_tmp_path(tmp)
@@ -82,7 +81,7 @@ class ActionModule(ActionBase):
                 source = self._loader.get_real_file(self._find_needle('files', source))
             except AnsibleError as e:
                 result['failed'] = True
-                result['msg'] = to_str(e)
+                result['msg'] = to_native(e)
                 self._remove_tmp_path(tmp)
                 return result
 
@@ -108,7 +107,7 @@ class ActionModule(ActionBase):
 
         if not remote_src:
             # fix file permissions when the copy is done as a different user
-            self._fixup_perms((tmp, tmp_src), remote_user)
+            self._fixup_perms2((tmp, tmp_src), remote_user)
             # Build temporary module_args.
             new_module_args = self._task.args.copy()
             new_module_args.update(

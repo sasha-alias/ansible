@@ -678,7 +678,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
 
         with patch('os.lchown', return_value=None) as m:
             self.assertEqual(am.set_owner_if_different('/path/to/file', 0, False), True)
-            m.assert_called_with('/path/to/file', 0, -1)
+            m.assert_called_with(b'/path/to/file', 0, -1)
 
             def _mock_getpwnam(*args, **kwargs):
                 mock_pw = MagicMock()
@@ -688,7 +688,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
             m.reset_mock()
             with patch('pwd.getpwnam', side_effect=_mock_getpwnam):
                 self.assertEqual(am.set_owner_if_different('/path/to/file', 'root', False), True)
-                m.assert_called_with('/path/to/file', 0, -1)
+                m.assert_called_with(b'/path/to/file', 0, -1)
 
             with patch('pwd.getpwnam', side_effect=KeyError):
                 self.assertRaises(SystemExit, am.set_owner_if_different, '/path/to/file', 'root', False)
@@ -717,7 +717,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
 
         with patch('os.lchown', return_value=None) as m:
             self.assertEqual(am.set_group_if_different('/path/to/file', 0, False), True)
-            m.assert_called_with('/path/to/file', -1, 0)
+            m.assert_called_with(b'/path/to/file', -1, 0)
 
             def _mock_getgrnam(*args, **kwargs):
                 mock_gr = MagicMock()
@@ -727,7 +727,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
             m.reset_mock()
             with patch('grp.getgrnam', side_effect=_mock_getgrnam):
                 self.assertEqual(am.set_group_if_different('/path/to/file', 'root', False), True)
-                m.assert_called_with('/path/to/file', -1, 0)
+                m.assert_called_with(b'/path/to/file', -1, 0)
 
             with patch('grp.getgrnam', side_effect=KeyError):
                 self.assertRaises(SystemExit, am.set_group_if_different, '/path/to/file', 'root', False)
@@ -804,8 +804,8 @@ class TestModuleUtilsBasic(ModuleTestCase):
         _os_chown.reset_mock()
         am.set_context_if_different.reset_mock()
         am.atomic_move('/path/to/src', '/path/to/dest')
-        _os_rename.assert_called_with('/path/to/src', '/path/to/dest')
-        self.assertEqual(_os_chmod.call_args_list, [call('/path/to/dest', basic.DEFAULT_PERM & ~18)])
+        _os_rename.assert_called_with(b'/path/to/src', b'/path/to/dest')
+        self.assertEqual(_os_chmod.call_args_list, [call(b'/path/to/dest', basic.DEFAULT_PERM & ~18)])
 
         # same as above, except selinux_enabled
         _os_path_exists.side_effect = [False, False]
@@ -822,8 +822,8 @@ class TestModuleUtilsBasic(ModuleTestCase):
         am.set_context_if_different.reset_mock()
         am.selinux_default_context.reset_mock()
         am.atomic_move('/path/to/src', '/path/to/dest')
-        _os_rename.assert_called_with('/path/to/src', '/path/to/dest')
-        self.assertEqual(_os_chmod.call_args_list, [call('/path/to/dest', basic.DEFAULT_PERM & ~18)])
+        _os_rename.assert_called_with(b'/path/to/src', b'/path/to/dest')
+        self.assertEqual(_os_chmod.call_args_list, [call(b'/path/to/dest', basic.DEFAULT_PERM & ~18)])
         self.assertEqual(am.selinux_default_context.call_args_list, [call('/path/to/dest')])
         self.assertEqual(am.set_context_if_different.call_args_list, [call('/path/to/dest', mock_context, False)])
 
@@ -846,7 +846,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
         _os_chown.reset_mock()
         am.set_context_if_different.reset_mock()
         am.atomic_move('/path/to/src', '/path/to/dest')
-        _os_rename.assert_called_with('/path/to/src', '/path/to/dest')
+        _os_rename.assert_called_with(b'/path/to/src', b'/path/to/dest')
 
         # dest missing, selinux enabled
         _os_path_exists.side_effect = [True, True]
@@ -868,7 +868,7 @@ class TestModuleUtilsBasic(ModuleTestCase):
         am.set_context_if_different.reset_mock()
         am.selinux_default_context.reset_mock()
         am.atomic_move('/path/to/src', '/path/to/dest')
-        _os_rename.assert_called_with('/path/to/src', '/path/to/dest')
+        _os_rename.assert_called_with(b'/path/to/src', b'/path/to/dest')
         self.assertEqual(am.selinux_context.call_args_list, [call('/path/to/dest')])
         self.assertEqual(am.set_context_if_different.call_args_list, [call('/path/to/dest', mock_context, False)])
 

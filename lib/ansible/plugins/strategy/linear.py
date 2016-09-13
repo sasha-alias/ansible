@@ -19,7 +19,7 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-from ansible.compat.six import iteritems, text_type
+from ansible.compat.six import iteritems
 
 from ansible.errors import AnsibleError
 from ansible.executor.play_iterator import PlayIterator
@@ -29,7 +29,8 @@ from ansible.playbook.task import Task
 from ansible.plugins import action_loader
 from ansible.plugins.strategy import StrategyBase
 from ansible.template import Templar
-from ansible.utils.unicode import to_unicode
+from ansible.module_utils._text import to_text
+
 
 try:
     from __main__ import display
@@ -181,7 +182,9 @@ class StrategyModule(StrategyBase):
                 any_errors_fatal = False
 
                 results = []
+                items_to_queue = []
                 for (host, task) in host_tasks:
+
                     if not task:
                         continue
 
@@ -212,7 +215,10 @@ class StrategyModule(StrategyBase):
                             continue
 
                     if task.action == 'meta':
-                        self._execute_meta(task, play_context, iterator)
+                        # for the linear strategy, we run meta tasks just once and for
+                        # all hosts currently being iterated over rather than one host
+                        results.extend(self._execute_meta(task, play_context, iterator))
+                        run_once = True
                     else:
                         # handle step if needed, skip meta actions as they are used internally
                         if self._step and choose_step:
@@ -238,7 +244,7 @@ class StrategyModule(StrategyBase):
                             saved_name = task.name
                             display.debug("done copying, going to template now")
                             try:
-                                task.name = text_type(templar.template(task.name, fail_on_undefined=False))
+                                task.name = to_text(templar.template(task.name, fail_on_undefined=False), nonstring='empty')
                                 display.debug("done templating")
                             except:
                                 # just ignore any errors during task name templating,
@@ -252,14 +258,20 @@ class StrategyModule(StrategyBase):
                             display.debug("sending task start callback")
 
                         self._blocked_hosts[host.get_name()] = True
-                        self._queue_task(host, task, task_vars, play_context)
+                        items_to_queue.append((host, task, task_vars))
+                        self._pending_results += 1
                         del task_vars
 
                     # if we're bypassing the host loop, break out now
                     if run_once:
                         break
 
+                    # FIXME: probably not required here any more with the result proc
+                    #        having been removed, so there's no only a single result
+                    #        queue for the main thread
                     results += self._process_pending_results(iterator, one_pass=True)
+
+                self._tqm.queue_multiple_tasks(items_to_queue, play_context)
 
                 # go to next host/task group
                 if skip_rest:
@@ -268,6 +280,36 @@ class StrategyModule(StrategyBase):
                 display.debug("done queuing things up, now waiting for results queue to drain")
                 results += self._wait_on_pending_results(iterator)
                 host_results.extend(results)
+
+                all_role_blocks = []
+                for hr in results:
+                    # handle include_role
+                    if hr._task.action == 'include_role':
+                        loop_var = None
+                        if hr._task.loop:
+                            loop_var = 'item'
+                            if hr._task.loop_control:
+                                loop_var = hr._task.loop_control.loop_var or 'item'
+                            include_results = hr._result['results']
+                        else:
+                            include_results = [ hr._result ]
+
+                        for include_result in include_results:
+                            if 'skipped' in include_result and include_result['skipped'] or 'failed' in include_result and include_result['failed']:
+                                continue
+
+                            role_vars = include_result.get('include_variables', dict())
+                            if loop_var and loop_var in include_result:
+                                role_vars[loop_var] = include_result[loop_var]
+
+                            display.debug("generating all_blocks data for role")
+                            new_ir = hr._task.copy()
+                            new_ir.args.update(role_vars)
+                            all_role_blocks.extend(new_ir.get_block_list(play=iterator._play, variable_manager=self._variable_manager, loader=self._loader))
+
+                if len(all_role_blocks) > 0:
+                    for host in hosts_left:
+                        iterator.add_tasks(host, all_role_blocks)
 
                 try:
                     included_files = IncludedFile.process_include_results(
@@ -327,7 +369,7 @@ class StrategyModule(StrategyBase):
                             for host in included_file._hosts:
                                 self._tqm._failed_hosts[host.name] = True
                                 iterator.mark_host_failed(host)
-                            display.error(to_unicode(e), wrap_text=False)
+                            display.error(to_text(e), wrap_text=False)
                             include_failure = True
                             continue
 

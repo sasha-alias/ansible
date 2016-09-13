@@ -34,7 +34,7 @@ import pwd
 
 from ansible.module_utils.basic import get_all_subclasses
 from ansible.module_utils.six import PY3, iteritems
-from ansible.module_utils._text import to_text
+from ansible.module_utils._text import to_native
 
 # py2 vs py3; replace with six via ansiballz
 try:
@@ -57,13 +57,6 @@ try:
 except ImportError:
     # python3
     maketrans = str.maketrans # TODO: is this really identical?
-
-try:
-    # Python 2
-    long
-except NameError:
-    # Python 3
-    long = int
 
 try:
     import selinux
@@ -358,7 +351,7 @@ class Facts(object):
             proc_1 = os.path.basename(proc_1)
 
         if proc_1 is not None:
-            proc_1 = to_text(proc_1)
+            proc_1 = to_native(proc_1)
             proc_1 = proc_1.strip()
 
         if proc_1 == 'init' or proc_1.endswith('sh'):
@@ -588,8 +581,8 @@ class Facts(object):
         size_available = None
         try:
             statvfs_result = os.statvfs(mountpoint)
-            size_total = statvfs_result.f_bsize * statvfs_result.f_blocks
-            size_available = statvfs_result.f_bsize * (statvfs_result.f_bavail)
+            size_total = statvfs_result.f_frsize * statvfs_result.f_blocks
+            size_available = statvfs_result.f_frsize * (statvfs_result.f_bavail)
         except OSError:
             pass
         return size_total, size_available
@@ -1030,11 +1023,11 @@ class LinuxHardware(Hardware):
             key = data[0]
             if key in self.ORIGINAL_MEMORY_FACTS:
                 val = data[1].strip().split(' ')[0]
-                self.facts["%s_mb" % key.lower()] = long(val) / 1024
+                self.facts["%s_mb" % key.lower()] = int(val) / 1024
 
             if key in self.MEMORY_FACTS:
                  val = data[1].strip().split(' ')[0]
-                 memstats[key.lower()] = long(val) / 1024
+                 memstats[key.lower()] = int(val) / 1024
 
         if None not in (memstats.get('memtotal'), memstats.get('memfree')):
             memstats['real:used'] = memstats['memtotal'] - memstats['memfree']
@@ -1555,10 +1548,10 @@ class SunOSHardware(Hardware):
             if 'Memory size' in line:
                 self.facts['memtotal_mb'] = line.split()[2]
         rc, out, err = self.module.run_command("/usr/sbin/swap -s")
-        allocated = long(out.split()[1][:-1])
-        reserved = long(out.split()[5][:-1])
-        used = long(out.split()[8][:-1])
-        free = long(out.split()[10][:-1])
+        allocated = int(out.split()[1][:-1])
+        reserved = int(out.split()[5][:-1])
+        used = int(out.split()[8][:-1])
+        free = int(out.split()[10][:-1])
         self.facts['swapfree_mb'] = free / 1024
         self.facts['swaptotal_mb'] = (free + used) / 1024
         self.facts['swap_allocated_mb'] = allocated / 1024
@@ -1633,8 +1626,8 @@ class OpenBSDHardware(Hardware):
         #  0 0 0  47512   28160   51   0   0   0   0   0   1   0  116    89   17  0  1 99
         rc, out, err = self.module.run_command("/usr/bin/vmstat")
         if rc == 0:
-            self.facts['memfree_mb'] = long(out.splitlines()[-1].split()[4]) / 1024
-            self.facts['memtotal_mb'] = long(self.sysctl['hw.usermem']) / 1024 / 1024
+            self.facts['memfree_mb'] = int(out.splitlines()[-1].split()[4]) / 1024
+            self.facts['memtotal_mb'] = int(self.sysctl['hw.usermem']) / 1024 / 1024
 
         # Get swapctl info. swapctl output looks like:
         # total: 69268 1K-blocks allocated, 0 used, 69268 available
@@ -1644,8 +1637,8 @@ class OpenBSDHardware(Hardware):
         if rc == 0:
             swaptrans = maketrans(' ', ' ')
             data = out.split()
-            self.facts['swapfree_mb'] = long(data[-2].translate(swaptrans, "kmg")) / 1024
-            self.facts['swaptotal_mb'] = long(data[1].translate(swaptrans, "kmg")) / 1024
+            self.facts['swapfree_mb'] = int(data[-2].translate(swaptrans, "kmg")) / 1024
+            self.facts['swaptotal_mb'] = int(data[1].translate(swaptrans, "kmg")) / 1024
 
     def get_processor_facts(self):
         processor = []
@@ -1715,11 +1708,11 @@ class FreeBSDHardware(Hardware):
         for line in out.split('\n'):
             data = line.split()
             if 'vm.stats.vm.v_page_size' in line:
-                pagesize = long(data[1])
+                pagesize = int(data[1])
             if 'vm.stats.vm.v_page_count' in line:
-                pagecount = long(data[1])
+                pagecount = int(data[1])
             if 'vm.stats.vm.v_free_count' in line:
-                freecount = long(data[1])
+                freecount = int(data[1])
         self.facts['memtotal_mb'] = pagesize * pagecount / 1024 / 1024
         self.facts['memfree_mb'] = pagesize * freecount / 1024 / 1024
         # Get swapinfo.  swapinfo output looks like:
@@ -1862,7 +1855,7 @@ class NetBSDHardware(Hardware):
             key = data[0]
             if key in NetBSDHardware.MEMORY_FACTS:
                 val = data[1].strip().split(' ')[0]
-                self.facts["%s_mb" % key.lower()] = long(val) / 1024
+                self.facts["%s_mb" % key.lower()] = int(val) / 1024
 
     @timeout(10)
     def get_mount_facts(self):
@@ -1928,9 +1921,9 @@ class AIX(Hardware):
         for line in out.split('\n'):
             data = line.split()
             if 'memory pages' in line:
-                pagecount = long(data[0])
+                pagecount = int(data[0])
             if 'free pages' in line:
-                freecount = long(data[0])
+                freecount = int(data[0])
         self.facts['memtotal_mb'] = pagesize * pagecount / 1024 / 1024
         self.facts['memfree_mb'] = pagesize * freecount / 1024 / 1024
         # Get swapinfo.  swapinfo output looks like:
@@ -1941,10 +1934,10 @@ class AIX(Hardware):
         if out:
             lines = out.split('\n')
             data = lines[1].split()
-            swaptotal_mb = long(data[0].rstrip('MB'))
+            swaptotal_mb = int(data[0].rstrip('MB'))
             percused = int(data[1].rstrip('%'))
             self.facts['swaptotal_mb'] = swaptotal_mb
-            self.facts['swapfree_mb'] = long(swaptotal_mb * ( 100 - percused ) / 100)
+            self.facts['swapfree_mb'] = int(swaptotal_mb * ( 100 - percused ) / 100)
 
     def get_dmi_facts(self):
         rc, out, err = self.module.run_command("/usr/sbin/lsattr -El sys0 -a fwversion")
@@ -2118,11 +2111,11 @@ class Darwin(Hardware):
             self.facts['processor_cores'] = self.sysctl['hw.physicalcpu']
 
     def get_memory_facts(self):
-        self.facts['memtotal_mb'] = long(self.sysctl['hw.memsize']) / 1024 / 1024
+        self.facts['memtotal_mb'] = int(self.sysctl['hw.memsize']) / 1024 / 1024
 
         rc, out, err = self.module.run_command("sysctl hw.usermem")
         if rc == 0:
-            self.facts['memfree_mb'] = long(out.splitlines()[-1].split()[1]) / 1024 / 1024
+            self.facts['memfree_mb'] = int(out.splitlines()[-1].split()[1]) / 1024 / 1024
 
 
 class Network(Facts):
@@ -3171,8 +3164,40 @@ class OpenBSDVirtual(Virtual):
         return self.facts
 
     def get_virtual_facts(self):
+        sysctl_path = self.module.get_bin_path('sysctl')
+
+        # Set empty values as default
         self.facts['virtualization_type'] = ''
         self.facts['virtualization_role'] = ''
+
+        if sysctl_path:
+            rc, out, err = self.module.run_command("%s -n hw.product" % sysctl_path)
+            if rc == 0:
+                if re.match('(KVM|Bochs|SmartDC).*', out):
+                    self.facts['virtualization_type'] = 'kvm'
+                    self.facts['virtualization_role'] = 'guest'
+                elif re.match('.*VMware.*', out):
+                    self.facts['virtualization_type'] = 'VMware'
+                    self.facts['virtualization_role'] = 'guest'
+                elif out.rstrip() == 'VirtualBox':
+                    self.facts['virtualization_type'] = 'virtualbox'
+                    self.facts['virtualization_role'] = 'guest'
+                elif out.rstrip() == 'HVM domU':
+                    self.facts['virtualization_type'] = 'xen'
+                    self.facts['virtualization_role'] = 'guest'
+                elif out.rstrip() == 'Parallels':
+                    self.facts['virtualization_type'] = 'parallels'
+                    self.facts['virtualization_role'] = 'guest'
+                elif out.rstrip() == 'RHEV Hypervisor':
+                    self.facts['virtualization_type'] = 'RHEV'
+                    self.facts['virtualization_role'] = 'guest'
+                else:
+                    # Try harder and see if hw.vendor has anything we could use.
+                    rc, out, err = self.module.run_command("%s -n hw.vendor" % sysctl_path)
+                    if rc == 0:
+                        if out.rstrip() == 'QEMU':
+                            self.facts['virtualization_type'] = 'kvm'
+                            self.facts['virtualization_role'] = 'guest'
 
 class HPUXVirtual(Virtual):
     """

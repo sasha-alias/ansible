@@ -112,7 +112,10 @@ def load_config_file():
         path0 = os.path.expanduser(path0)
         if os.path.isdir(path0):
             path0 += "/ansible.cfg"
-    path1 = os.getcwd() + "/ansible.cfg"
+    try:
+        path1 = os.getcwd() + "/ansible.cfg"
+    except OSError:
+        path1 = None
     path2 = os.path.expanduser("~/.ansible.cfg")
     path3 = "/etc/ansible/ansible.cfg"
 
@@ -213,9 +216,9 @@ DEFAULT_SUDO_FLAGS        = get_config(p, DEFAULTS, 'sudo_flags', 'ANSIBLE_SUDO_
 DEFAULT_ASK_SUDO_PASS     = get_config(p, DEFAULTS, 'ask_sudo_pass',    'ANSIBLE_ASK_SUDO_PASS',    False, boolean=True)
 
 # Become
-BECOME_ERROR_STRINGS      = {'sudo': 'Sorry, try again.', 'su': 'Authentication failure', 'pbrun': '', 'pfexec': '', 'runas': '', 'doas': 'Permission denied', 'dzdo': ''} #FIXME: deal with i18n
-BECOME_MISSING_STRINGS    = {'sudo': 'sorry, a password is required to run sudo', 'su': '', 'pbrun': '', 'pfexec': '', 'runas': '', 'doas': 'Authorization required', 'dzdo': ''} #FIXME: deal with i18n
-BECOME_METHODS            = ['sudo','su','pbrun','pfexec','runas','doas','dzdo']
+BECOME_ERROR_STRINGS      = {'sudo': 'Sorry, try again.', 'su': 'Authentication failure', 'pbrun': '', 'pfexec': '', 'runas': '', 'doas': 'Permission denied', 'dzdo': '', 'ksu': 'Password incorrect'} #FIXME: deal with i18n
+BECOME_MISSING_STRINGS    = {'sudo': 'sorry, a password is required to run sudo', 'su': '', 'pbrun': '', 'pfexec': '', 'runas': '', 'doas': 'Authorization required', 'dzdo': '', 'ksu': 'No password given'} #FIXME: deal with i18n
+BECOME_METHODS            = ['sudo','su','pbrun','pfexec','runas','doas','dzdo','ksu']
 BECOME_ALLOW_SAME_USER    = get_config(p, 'privilege_escalation', 'become_allow_same_user', 'ANSIBLE_BECOME_ALLOW_SAME_USER', False, boolean=True)
 DEFAULT_BECOME_METHOD     = get_config(p, 'privilege_escalation', 'become_method', 'ANSIBLE_BECOME_METHOD','sudo' if DEFAULT_SUDO else 'su' if DEFAULT_SU else 'sudo' ).lower()
 DEFAULT_BECOME            = get_config(p, 'privilege_escalation', 'become', 'ANSIBLE_BECOME',False, boolean=True)
@@ -277,6 +280,7 @@ ANSIBLE_SSH_ARGS               = get_config(p, 'ssh_connection', 'ssh_args', 'AN
 ANSIBLE_SSH_CONTROL_PATH       = get_config(p, 'ssh_connection', 'control_path', 'ANSIBLE_SSH_CONTROL_PATH', "%(directory)s/ansible-ssh-%%h-%%p-%%r")
 ANSIBLE_SSH_PIPELINING         = get_config(p, 'ssh_connection', 'pipelining', 'ANSIBLE_SSH_PIPELINING', False, boolean=True)
 ANSIBLE_SSH_RETRIES            = get_config(p, 'ssh_connection', 'retries', 'ANSIBLE_SSH_RETRIES', 0, integer=True)
+ANSIBLE_SSH_EXECUTABLE         = get_config(p, 'ssh_connection', 'ssh_executable', 'ANSIBLE_SSH_EXECUTABLE', 'ssh')
 PARAMIKO_RECORD_HOST_KEYS      = get_config(p, 'paramiko_connection', 'record_host_keys', 'ANSIBLE_PARAMIKO_RECORD_HOST_KEYS', True, boolean=True)
 PARAMIKO_PROXY_COMMAND         = get_config(p, 'paramiko_connection', 'proxy_command', 'ANSIBLE_PARAMIKO_PROXY_COMMAND', None)
 

@@ -232,11 +232,11 @@ class VariableManager:
             for role in play.get_roles():
                 all_vars = combine_vars(all_vars, role.get_default_vars())
 
-            # if we have a task in this context, and that task has a role, make
-            # sure it sees its defaults above any other roles, as we previously
-            # (v1) made sure each task had a copy of its roles default vars
-            if task and task._role is not None:
-                all_vars = combine_vars(all_vars, task._role.get_default_vars(dep_chain=task.get_dep_chain()))
+        # if we have a task in this context, and that task has a role, make
+        # sure it sees its defaults above any other roles, as we previously
+        # (v1) made sure each task had a copy of its roles default vars
+        if task and task._role is not None and (play or task.action == 'include_role'):
+            all_vars = combine_vars(all_vars, task._role.get_default_vars(dep_chain=task.get_dep_chain()))
 
         if host:
             # next, if a host is specified, we load any vars from group_vars
@@ -393,10 +393,9 @@ class VariableManager:
         if host:
             variables['group_names'] = sorted([group.name for group in host.get_groups() if group.name != 'all'])
 
-            if self._inventory is not None:
-                variables['groups']  = dict()
-                for (group_name, group) in iteritems(self._inventory.groups):
-                    variables['groups'][group_name] = [h.name for h in group.get_hosts()]
+            if self._inventory:
+                variables['groups']  = self._inventory.get_group_dict()
+
         if play:
             variables['role_names'] = [r._role_name for r in play.roles]
 

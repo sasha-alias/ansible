@@ -30,9 +30,9 @@ from ansible.playbook.taggable import Taggable
 
 class Block(Base, Become, Conditional, Taggable):
 
-    _block  = FieldAttribute(isa='list', default=[])
-    _rescue = FieldAttribute(isa='list', default=[])
-    _always = FieldAttribute(isa='list', default=[])
+    _block  = FieldAttribute(isa='list', default=[], inherit=False)
+    _rescue = FieldAttribute(isa='list', default=[], inherit=False)
+    _always = FieldAttribute(isa='list', default=[], inherit=False)
     _delegate_to = FieldAttribute(isa='list')
     _delegate_facts = FieldAttribute(isa='bool', default=False)
     _any_errors_fatal = FieldAttribute(isa='bool')
@@ -202,7 +202,7 @@ class Block(Base, Become, Conditional, Taggable):
         '''
 
         data = dict()
-        for attr in self._get_base_attributes():
+        for attr in self._valid_attrs:
             if attr not in ('block', 'rescue', 'always'):
                 data[attr] = getattr(self, attr)
 
@@ -229,7 +229,7 @@ class Block(Base, Become, Conditional, Taggable):
 
         # we don't want the full set of attributes (the task lists), as that
         # would lead to a serialize/deserialize loop
-        for attr in self._get_base_attributes():
+        for attr in self._valid_attrs:
             if attr in data and attr not in ('block', 'rescue', 'always'):
                 setattr(self, attr, data.get(attr))
 
@@ -278,6 +278,9 @@ class Block(Base, Become, Conditional, Taggable):
             for dep in dep_chain:
                 dep.set_loader(loader)
 
+    def _get_attr_environment(self):
+        return self._get_parent_attribute('environment', extend=True)
+
     def _get_parent_attribute(self, attr, extend=False):
         '''
         Generic logic to get the attribute or parent attribute for a block value.
@@ -288,57 +291,49 @@ class Block(Base, Become, Conditional, Taggable):
             value = self._attributes[attr]
 
             if self._parent and (value is None or extend):
-                parent_value = getattr(self._parent, attr, None)
-                if extend:
-                    value = self._extend_value(value, parent_value)
-                else:
-                    value = parent_value
-            if self._role and (value is None or extend) and hasattr(self._role, attr):
-                parent_value = getattr(self._role, attr, None)
-                if extend:
-                    value = self._extend_value(value, parent_value)
-                else:
-                    value = parent_value
+                try:
+                    parent_value = getattr(self._parent, attr, None)
+                    if extend:
+                        value = self._extend_value(value, parent_value)
+                    else:
+                        value = parent_value
+                except AttributeError:
+                    pass
+            if self._role and (value is None or extend):
+                try:
+                    parent_value = getattr(self._role, attr, None)
+                    if extend:
+                        value = self._extend_value(value, parent_value)
+                    else:
+                        value = parent_value
 
-                dep_chain = self.get_dep_chain()
-                if dep_chain and (value is None or extend):
-                    dep_chain.reverse()
-                    for dep in dep_chain:
-                        dep_value = getattr(dep, attr, None)
-                        if extend:
-                            value = self._extend_value(value, dep_value)
-                        else:
-                            value = dep_value
+                    dep_chain = self.get_dep_chain()
+                    if dep_chain and (value is None or extend):
+                        dep_chain.reverse()
+                        for dep in dep_chain:
+                            dep_value = getattr(dep, attr, None)
+                            if extend:
+                                value = self._extend_value(value, dep_value)
+                            else:
+                                value = dep_value
 
-                        if value is not None and not extend:
-                            break
-            if self._play and (value is None or extend) and hasattr(self._play, attr):
-                parent_value = getattr(self._play, attr, None)
-                if extend:
-                    value = self._extend_value(value, parent_value)
-                else:
-                    value = parent_value
+                            if value is not None and not extend:
+                                break
+                except AttributeError:
+                    pass
+            if self._play and (value is None or extend):
+                try:
+                    parent_value = getattr(self._play, attr, None)
+                    if extend:
+                        value = self._extend_value(value, parent_value)
+                    else:
+                        value = parent_value
+                except AttributeError:
+                    pass
         except KeyError as e:
             pass
 
         return value
-
-    def _get_attr_environment(self):
-        '''
-        Override for the 'tags' getattr fetcher, used from Base.
-        '''
-        environment = self._attributes['environment']
-        parent_environment = self._get_parent_attribute('environment', extend=True)
-        if parent_environment is not None:
-            environment = self._extend_value(environment, parent_environment)
-
-        return environment
-
-    def _get_attr_any_errors_fatal(self):
-        '''
-        Override for the 'tags' getattr fetcher, used from Base.
-        '''
-        return self._get_parent_attribute('any_errors_fatal')
 
     def filter_tagged_tasks(self, play_context, all_vars):
         '''

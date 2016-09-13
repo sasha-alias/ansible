@@ -53,6 +53,7 @@ MAGIC_VARIABLE_MAPPING = dict(
    remote_addr      = ('ansible_ssh_host', 'ansible_host'),
    remote_user      = ('ansible_ssh_user', 'ansible_user'),
    port             = ('ansible_ssh_port', 'ansible_port'),
+   ssh_executable   = ('ansible_ssh_executable',),
    accelerate_port  = ('ansible_accelerate_port',),
    password         = ('ansible_ssh_pass', 'ansible_password'),
    private_key_file = ('ansible_ssh_private_key_file', 'ansible_private_key_file'),
@@ -122,6 +123,7 @@ TASK_ATTRIBUTE_OVERRIDES = (
     'become_user',
     'become_pass',
     'become_method',
+    'become_flags',
     'connection',
     'docker_extra_args',
     'delegate_to',
@@ -138,6 +140,7 @@ RESET_VARS = (
     'ansible_ssh_user',
     'ansible_ssh_private_key_file',
     'ansible_ssh_pipelining',
+    'ansible_ssh_executable',
     'ansible_user',
     'ansible_host',
     'ansible_port',
@@ -164,6 +167,7 @@ class PlayContext(Base):
     _sftp_extra_args  = FieldAttribute(isa='string')
     _scp_extra_args   = FieldAttribute(isa='string')
     _ssh_extra_args   = FieldAttribute(isa='string')
+    _ssh_executable   = FieldAttribute(isa='string', default=C.ANSIBLE_SSH_EXECUTABLE)
     _connection_lockfd= FieldAttribute(isa='int')
     _pipelining       = FieldAttribute(isa='bool', default=C.ANSIBLE_SSH_PIPELINING)
     _accelerate       = FieldAttribute(isa='bool', default=False)
@@ -520,6 +524,13 @@ class PlayContext(Base):
 
                 prompt='assword:'
                 becomecmd = '%s -b %s -u %s %s' % (exe, flags, self.become_user, success_cmd)
+
+            elif self.become_method == 'ksu':
+                def detect_ksu_prompt(data):
+                    return re.match("Kerberos password for .*@.*:", data)
+
+                prompt = detect_ksu_prompt
+                becomecmd = '%s %s %s -e %s' % (exe, self.become_user, flags, command)
 
             elif self.become_method == 'pfexec':
 

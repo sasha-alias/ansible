@@ -87,6 +87,8 @@ except ImportError:
     Sequence = (list, tuple)
     Mapping = (dict,)
 
+# Note: When getting Sequence from collections, it matches with strings.  If
+# this matters, make sure to check for strings before checking for sequencetype
 try:
     from collections.abc import KeysView
     SEQUENCETYPE = (Sequence, KeysView)
@@ -292,7 +294,7 @@ def load_platform_subclass(cls, *args, **kwargs):
     return super(cls, subclass).__new__(subclass)
 
 
-def json_dict_unicode_to_bytes(d, encoding='utf-8'):
+def json_dict_unicode_to_bytes(d, encoding='utf-8', errors='surrogate_or_strict'):
     ''' Recursively convert dict keys and values to byte str
 
         Specialized for json return because this only handles, lists, tuples,
@@ -300,17 +302,17 @@ def json_dict_unicode_to_bytes(d, encoding='utf-8'):
     '''
 
     if isinstance(d, text_type):
-        return d.encode(encoding)
+        return to_bytes(d, encoding=encoding, errors=errors)
     elif isinstance(d, dict):
-        return dict(map(json_dict_unicode_to_bytes, iteritems(d), repeat(encoding)))
+        return dict(map(json_dict_unicode_to_bytes, iteritems(d), repeat(encoding), repeat(errors)))
     elif isinstance(d, list):
-        return list(map(json_dict_unicode_to_bytes, d, repeat(encoding)))
+        return list(map(json_dict_unicode_to_bytes, d, repeat(encoding), repeat(errors)))
     elif isinstance(d, tuple):
-        return tuple(map(json_dict_unicode_to_bytes, d, repeat(encoding)))
+        return tuple(map(json_dict_unicode_to_bytes, d, repeat(encoding), repeat(errors)))
     else:
         return d
 
-def json_dict_bytes_to_unicode(d, encoding='utf-8'):
+def json_dict_bytes_to_unicode(d, encoding='utf-8', errors='surrogate_or_strict'):
     ''' Recursively convert dict keys and values to byte str
 
         Specialized for json return because this only handles, lists, tuples,
@@ -319,13 +321,13 @@ def json_dict_bytes_to_unicode(d, encoding='utf-8'):
 
     if isinstance(d, binary_type):
         # Warning, can traceback
-        return d.decode(encoding)
+        return to_text(d, encoding=encoding, errors=errors)
     elif isinstance(d, dict):
-        return dict(map(json_dict_bytes_to_unicode, iteritems(d), repeat(encoding)))
+        return dict(map(json_dict_bytes_to_unicode, iteritems(d), repeat(encoding), repeat(errors)))
     elif isinstance(d, list):
-        return list(map(json_dict_bytes_to_unicode, d, repeat(encoding)))
+        return list(map(json_dict_bytes_to_unicode, d, repeat(encoding), repeat(errors)))
     elif isinstance(d, tuple):
-        return tuple(map(json_dict_bytes_to_unicode, d, repeat(encoding)))
+        return tuple(map(json_dict_bytes_to_unicode, d, repeat(encoding), repeat(errors)))
     else:
         return d
 
@@ -335,14 +337,7 @@ def return_values(obj):
     For use with removing sensitive values pre-jsonification."""
     if isinstance(obj, (text_type, binary_type)):
         if obj:
-            if isinstance(obj, text_type) and PY2:
-                # Unicode objects should all convert to utf-8
-                yield obj.encode('utf-8')
-            elif isinstance(obj, binary_type) and PY3:
-                yield obj.decode('utf-8', 'surrogateescape')
-            else:
-                # Already native string for this python version
-                yield obj
+            yield to_native(obj, errors='surrogate_or_strict')
         return
     elif isinstance(obj, SEQUENCETYPE):
         for element in obj:
@@ -356,7 +351,7 @@ def return_values(obj):
         # This must come before int because bools are also ints
         return
     elif isinstance(obj, NUMBERTYPES):
-        yield str(obj)
+        yield to_native(obj, nonstring='simplerepr')
     else:
         raise TypeError('Unknown parameter type: %s, %s' % (type(obj), obj))
 
@@ -369,11 +364,11 @@ def remove_values(value, no_log_strings):
         if isinstance(value, text_type):
             value_is_text = True
             if PY2:
-                native_str_value = value.encode('utf-8')
+                native_str_value = to_bytes(value, encoding='utf-8', errors='surrogate_or_strict')
         elif isinstance(value, binary_type):
             value_is_text = False
             if PY3:
-                native_str_value = value.decode('utf-8', 'surrogateescape')
+                native_str_value = to_text(value, encoding='utf-8', errors='surrogate_or_strict')
 
         if native_str_value in no_log_strings:
             return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
@@ -381,9 +376,9 @@ def remove_values(value, no_log_strings):
             native_str_value = native_str_value.replace(omit_me, '*' * 8)
 
         if value_is_text and isinstance(native_str_value, binary_type):
-            value = native_str_value.decode('utf-8', 'replace')
+            value = to_text(native_str_value, encoding='utf-8', errors='surrogate_or_replace')
         elif not value_is_text and isinstance(native_str_value, text_type):
-            value = native_str_value.encode('utf-8', 'surrogateescape')
+            value = to_bytes(native_str_value, encoding='utf-8', errors='surrogate_or_replace')
         else:
             value = native_str_value
     elif isinstance(value, SEQUENCETYPE):
@@ -391,7 +386,7 @@ def remove_values(value, no_log_strings):
     elif isinstance(value, Mapping):
         return dict((k, remove_values(v, no_log_strings)) for k, v in value.items())
     elif isinstance(value, tuple(chain(NUMBERTYPES, (bool, NoneType)))):
-        stringy_value = str(value)
+        stringy_value = to_native(value, encoding='utf-8', errors='surrogate_or_strict')
         if stringy_value in no_log_strings:
             return 'VALUE_SPECIFIED_IN_NO_LOG_PARAMETER'
         for omit_me in no_log_strings:
@@ -735,12 +730,14 @@ class AnsibleModule(object):
         if path is None:
             return {}
         else:
-            path = os.path.expanduser(path)
+            path = os.path.expanduser(os.path.expandvars(path))
 
+        b_path = to_bytes(path, errors='surrogate_or_strict')
         # if the path is a symlink, and we're following links, get
         # the target of the link instead for testing
-        if params.get('follow', False) and os.path.islink(path):
-            path = os.path.realpath(path)
+        if params.get('follow', False) and os.path.islink(b_path):
+            b_path = os.path.realpath(b_path)
+            path = to_native(b_path)
 
         mode   = params.get('mode', None)
         owner  = params.get('owner', None)
@@ -808,7 +805,7 @@ class AnsibleModule(object):
         if not HAVE_SELINUX or not self.selinux_enabled():
             return context
         try:
-            ret = selinux.matchpathcon(to_native(path, 'strict'), mode)
+            ret = selinux.matchpathcon(to_native(path, errors='surrogate_or_strict'), mode)
         except OSError:
             return context
         if ret[0] == -1:
@@ -823,7 +820,7 @@ class AnsibleModule(object):
         if not HAVE_SELINUX or not self.selinux_enabled():
             return context
         try:
-            ret = selinux.lgetfilecon_raw(to_native(path, 'strict'))
+            ret = selinux.lgetfilecon_raw(to_native(path, errors='surrogate_or_strict'))
         except OSError:
             e = get_exception()
             if e.errno == errno.ENOENT:
@@ -838,8 +835,9 @@ class AnsibleModule(object):
         return context
 
     def user_and_group(self, filename):
-        filename = os.path.expanduser(filename)
-        st = os.lstat(filename)
+        filename = os.path.expanduser(os.path.expandvars(filename))
+        b_filename = to_bytes(filename, errors='surrogate_or_strict')
+        st = os.lstat(b_filename)
         uid = st.st_uid
         gid = st.st_gid
         return (uid, gid)
@@ -922,7 +920,8 @@ class AnsibleModule(object):
         return changed
 
     def set_owner_if_different(self, path, owner, changed, diff=None):
-        path = os.path.expanduser(path)
+        path = os.path.expanduser(os.path.expandvars(path))
+        b_path = to_bytes(path, errors='surrogate_or_strict')
         if owner is None:
             return changed
         orig_uid, orig_gid = self.user_and_group(path)
@@ -946,17 +945,18 @@ class AnsibleModule(object):
             if self.check_mode:
                 return True
             try:
-                os.lchown(path, uid, -1)
+                os.lchown(b_path, uid, -1)
             except OSError:
                 self.fail_json(path=path, msg='chown failed')
             changed = True
         return changed
 
     def set_group_if_different(self, path, group, changed, diff=None):
-        path = os.path.expanduser(path)
+        path = os.path.expanduser(os.path.expandvars(path))
+        b_path = to_bytes(path, errors='surrogate_or_strict')
         if group is None:
             return changed
-        orig_uid, orig_gid = self.user_and_group(path)
+        orig_uid, orig_gid = self.user_and_group(b_path)
         try:
             gid = int(group)
         except ValueError:
@@ -977,15 +977,16 @@ class AnsibleModule(object):
             if self.check_mode:
                 return True
             try:
-                os.lchown(path, -1, gid)
+                os.lchown(b_path, -1, gid)
             except OSError:
                 self.fail_json(path=path, msg='chgrp failed')
             changed = True
         return changed
 
     def set_mode_if_different(self, path, mode, changed, diff=None):
-        path = os.path.expanduser(path)
-        path_stat = os.lstat(path)
+        b_path = to_bytes(path, errors='surrogate_or_strict')
+        b_path = os.path.expanduser(os.path.expandvars(b_path))
+        path_stat = os.lstat(b_path)
 
         if mode is None:
             return changed
@@ -1024,22 +1025,22 @@ class AnsibleModule(object):
             # every time
             try:
                 if hasattr(os, 'lchmod'):
-                    os.lchmod(path, mode)
+                    os.lchmod(b_path, mode)
                 else:
-                    if not os.path.islink(path):
-                        os.chmod(path, mode)
+                    if not os.path.islink(b_path):
+                        os.chmod(b_path, mode)
                     else:
                         # Attempt to set the perms of the symlink but be
                         # careful not to change the perms of the underlying
                         # file while trying
-                        underlying_stat = os.stat(path)
-                        os.chmod(path, mode)
-                        new_underlying_stat = os.stat(path)
+                        underlying_stat = os.stat(b_path)
+                        os.chmod(b_path, mode)
+                        new_underlying_stat = os.stat(b_path)
                         if underlying_stat.st_mode != new_underlying_stat.st_mode:
-                            os.chmod(path, stat.S_IMODE(underlying_stat.st_mode))
+                            os.chmod(b_path, stat.S_IMODE(underlying_stat.st_mode))
             except OSError:
                 e = get_exception()
-                if os.path.islink(path) and e.errno == errno.EPERM:  # Can't set mode on symbolic links
+                if os.path.islink(b_path) and e.errno == errno.EPERM:  # Can't set mode on symbolic links
                     pass
                 elif e.errno in (errno.ENOENT, errno.ELOOP): # Can't set mode on broken symbolic links
                     pass
@@ -1049,7 +1050,7 @@ class AnsibleModule(object):
                 e = get_exception()
                 self.fail_json(path=path, msg='chmod failed', details=str(e))
 
-            path_stat = os.lstat(path)
+            path_stat = os.lstat(b_path)
             new_mode = stat.S_IMODE(path_stat.st_mode)
 
             if new_mode != prev_mode:
@@ -1182,7 +1183,8 @@ class AnsibleModule(object):
         path = kwargs.get('path', kwargs.get('dest', None))
         if path is None:
             return kwargs
-        if os.path.exists(path):
+        b_path = to_bytes(path, errors='surrogate_or_strict')
+        if os.path.exists(b_path):
             (uid, gid) = self.user_and_group(path)
             kwargs['uid'] = uid
             kwargs['gid'] = gid
@@ -1196,14 +1198,14 @@ class AnsibleModule(object):
                 group = str(gid)
             kwargs['owner'] = user
             kwargs['group'] = group
-            st = os.lstat(path)
+            st = os.lstat(b_path)
             kwargs['mode'] = '0%03o' % stat.S_IMODE(st[stat.ST_MODE])
             # secontext not yet supported
-            if os.path.islink(path):
+            if os.path.islink(b_path):
                 kwargs['state'] = 'link'
-            elif os.path.isdir(path):
+            elif os.path.isdir(b_path):
                 kwargs['state'] = 'directory'
-            elif os.stat(path).st_nlink > 1:
+            elif os.stat(b_path).st_nlink > 1:
                 kwargs['state'] = 'hard'
             else:
                 kwargs['state'] = 'file'
@@ -1248,8 +1250,8 @@ class AnsibleModule(object):
                 raise Exception("internal error: required and default are mutually exclusive for %s" % k)
             if aliases is None:
                 continue
-            if type(aliases) != list:
-                raise Exception('internal error: aliases must be a list')
+            if not isinstance(aliases, SEQUENCETYPE) or isinstance(aliases, (binary_type, text_type)):
+                raise Exception('internal error: aliases must be a list or tuple')
             for alias in aliases:
                 self._legal_inputs.append(alias)
                 aliases_results[alias] = k
@@ -1362,10 +1364,11 @@ class AnsibleModule(object):
             choices = v.get('choices',None)
             if choices is None:
                 continue
-            if isinstance(choices, SEQUENCETYPE):
+            if isinstance(choices, SEQUENCETYPE) and not isinstance(choices, (binary_type, text_type)):
                 if k in self.params:
                     if self.params[k] not in choices:
-                        # PyYaml converts certain strings to bools.  If we can unambiguously convert back, do so before checking the value.  If we can't figure this out, module author is responsible.
+                        # PyYaml converts certain strings to bools.  If we can unambiguously convert back, do so before checking
+                        # the value.  If we can't figure this out, module author is responsible.
                         lowered_choices = None
                         if self.params[k] == 'False':
                             lowered_choices = _lenient_lowercase(choices)
@@ -1384,7 +1387,7 @@ class AnsibleModule(object):
                                 (self.params[k],) = overlap
 
                         if self.params[k] not in choices:
-                            choices_str=",".join([str(c) for c in choices])
+                            choices_str=",".join([to_native(c) for c in choices])
                             msg="value of %s must be one of: %s, got: %s" % (k, choices_str, self.params[k])
                             self.fail_json(msg=msg)
             else:
@@ -1504,7 +1507,7 @@ class AnsibleModule(object):
         if isinstance(value, float):
             return value
 
-        if isinstance(value, string_types):
+        if isinstance(value, (binary_type, text_type, int)):
             return float(value)
 
         raise TypeError('%s cannot be converted to a float' % type(value))
@@ -1748,7 +1751,7 @@ class AnsibleModule(object):
 
     def boolean(self, arg):
         ''' return a bool for the arg '''
-        if arg is None or type(arg) == bool:
+        if arg is None or isinstance(arg, bool):
             return arg
         if isinstance(arg, string_types):
             arg = arg.lower()
@@ -1902,11 +1905,13 @@ class AnsibleModule(object):
         to work around limitations, corner cases and ensure selinux context is saved if possible'''
         context = None
         dest_stat = None
-        if os.path.exists(dest):
+        b_src = to_bytes(src, errors='surrogate_or_strict')
+        b_dest = to_bytes(dest, errors='surrogate_or_strict')
+        if os.path.exists(b_dest):
             try:
-                dest_stat = os.stat(dest)
-                os.chmod(src, dest_stat.st_mode & PERM_BITS)
-                os.chown(src, dest_stat.st_uid, dest_stat.st_gid)
+                dest_stat = os.stat(b_dest)
+                os.chmod(b_src, dest_stat.st_mode & PERM_BITS)
+                os.chown(b_src, dest_stat.st_uid, dest_stat.st_gid)
             except OSError:
                 e = get_exception()
                 if e.errno != errno.EPERM:
@@ -1917,7 +1922,7 @@ class AnsibleModule(object):
             if self.selinux_enabled():
                 context = self.selinux_default_context(dest)
 
-        creating = not os.path.exists(dest)
+        creating = not os.path.exists(b_dest)
 
         try:
             login_name = os.getlogin()
@@ -1933,7 +1938,7 @@ class AnsibleModule(object):
 
         try:
             # Optimistically try a rename, solves some corner cases and can avoid useless work, throws exception if not atomic.
-            os.rename(src, dest)
+            os.rename(b_src, b_dest)
         except (IOError, OSError):
             e = get_exception()
             if e.errno not in [errno.EPERM, errno.EXDEV, errno.EACCES, errno.ETXTBSY]:
@@ -1941,14 +1946,20 @@ class AnsibleModule(object):
                 # and 26 (text file busy) which happens on vagrant synced folders and other 'exotic' non posix file systems
                 self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
             else:
-                dest_dir = os.path.dirname(dest)
-                dest_file = os.path.basename(dest)
+                b_dest_dir = os.path.dirname(b_dest)
+                # Use bytes here.  In the shippable CI, this fails with
+                # a UnicodeError with surrogateescape'd strings for an unknown
+                # reason (doesn't happen in a local Ubuntu16.04 VM)
+                native_dest_dir = b_dest_dir
+                native_suffix = os.path.basename(b_dest)
+                native_prefix = b('.ansible_tmp')
                 try:
                     tmp_dest_fd, tmp_dest_name = tempfile.mkstemp(
-                        prefix=".ansible_tmp", dir=dest_dir, suffix=dest_file)
+                        prefix=native_prefix, dir=native_dest_dir, suffix=native_suffix)
                 except (OSError, IOError):
                     e = get_exception()
-                    self.fail_json(msg='The destination directory (%s) is not writable by the current user. Error was: %s' % (dest_dir, e))
+                    self.fail_json(msg='The destination directory (%s) is not writable by the current user. Error was: %s' % (os.path.dirname(dest), e))
+                b_tmp_dest_name = to_bytes(tmp_dest_name, errors='surrogate_or_strict')
 
                 try:
                     try:
@@ -1958,21 +1969,21 @@ class AnsibleModule(object):
                         if switched_user and os.getuid() != 0:
                             # cleanup will happen by 'rm' of tempdir
                             # copy2 will preserve some metadata
-                            shutil.copy2(src, tmp_dest_name)
+                            shutil.copy2(b_src, b_tmp_dest_name)
                         else:
-                            shutil.move(src, tmp_dest_name)
+                            shutil.move(b_src, b_tmp_dest_name)
                         if self.selinux_enabled():
                             self.set_context_if_different(
-                                tmp_dest_name, context, False)
+                                b_tmp_dest_name, context, False)
                         try:
-                            tmp_stat = os.stat(tmp_dest_name)
+                            tmp_stat = os.stat(b_tmp_dest_name)
                             if dest_stat and (tmp_stat.st_uid != dest_stat.st_uid or tmp_stat.st_gid != dest_stat.st_gid):
-                                os.chown(tmp_dest_name, dest_stat.st_uid, dest_stat.st_gid)
+                                os.chown(b_tmp_dest_name, dest_stat.st_uid, dest_stat.st_gid)
                         except OSError:
                             e = get_exception()
                             if e.errno != errno.EPERM:
                                 raise
-                        os.rename(tmp_dest_name, dest)
+                        os.rename(b_tmp_dest_name, b_dest)
                     except (shutil.Error, OSError, IOError):
                         e = get_exception()
                         # sadly there are some situations where we cannot ensure atomicity, but only if
@@ -1981,8 +1992,8 @@ class AnsibleModule(object):
                             #TODO: issue warning that this is an unsafe operation, but doing it cause user insists
                             try:
                                 try:
-                                    out_dest = open(dest, 'wb')
-                                    in_src = open(src, 'rb')
+                                    out_dest = open(b_dest, 'wb')
+                                    in_src = open(b_src, 'rb')
                                     shutil.copyfileobj(in_src, out_dest)
                                 finally: # assuring closed files in 2.4 compatible way
                                     if out_dest:
@@ -1996,16 +2007,16 @@ class AnsibleModule(object):
                         else:
                             self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
                 finally:
-                    self.cleanup(tmp_dest_name)
+                    self.cleanup(b_tmp_dest_name)
 
         if creating:
             # make sure the file has the correct permissions
             # based on the current value of umask
             umask = os.umask(0)
             os.umask(umask)
-            os.chmod(dest, DEFAULT_PERM & ~umask)
+            os.chmod(b_dest, DEFAULT_PERM & ~umask)
             if switched_user:
-                os.chown(dest, os.getuid(), os.getgid())
+                os.chown(b_dest, os.getuid(), os.getgid())
 
         if self.selinux_enabled():
             # rename might not preserve context
@@ -2028,7 +2039,7 @@ class AnsibleModule(object):
         :kw path_prefix: If given, additional path to find the command in.
             This adds to the PATH environment vairable so helper commands in
             the same directory can also be found
-        :kw cwd: iIf given, working directory to run the command inside
+        :kw cwd: If given, working directory to run the command inside
         :kw use_unsafe_shell: See `args` parameter.  Default False
         :kw prompt_regex: Regex string (not a compiled regex) which can be
             used to detect prompts in the stdout which would otherwise cause
@@ -2047,7 +2058,7 @@ class AnsibleModule(object):
             # On python2.6 and below, shlex has problems with text type
             # On python3, shlex needs a text type.
             if PY2:
-                args = to_bytes(args)
+                args = to_bytes(args, errors='surrogate_or_strict')
             elif PY3:
                 args = to_text(args, errors='surrogateescape')
             args = shlex.split(args)
@@ -2061,7 +2072,7 @@ class AnsibleModule(object):
                 if PY3:
                     prompt_regex = to_bytes(prompt_regex, errors='surrogateescape')
                 elif PY2:
-                    prompt_regex = to_bytes(prompt_regex)
+                    prompt_regex = to_bytes(prompt_regex, errors='surrogate_or_strict')
             try:
                 prompt_re = re.compile(prompt_regex, re.MULTILINE)
             except re.error:
@@ -2110,10 +2121,10 @@ class AnsibleModule(object):
         to_clean_args = args
         if PY2:
             if isinstance(args, text_type):
-                to_clean_args = args.encode('utf-8')
+                to_clean_args = to_bytes(args)
         else:
             if isinstance(args, binary_type):
-                to_clean_args = args.decode('utf-8', errors='replace')
+                to_clean_args = to_text(args)
         if isinstance(args, (text_type, binary_type)):
             to_clean_args = shlex.split(to_clean_args)
 
@@ -2182,11 +2193,7 @@ class AnsibleModule(object):
                 if not binary_data:
                     data += '\n'
                 if isinstance(data, text_type):
-                    if PY3:
-                        errors = 'surrogateescape'
-                    else:
-                        errors = 'strict'
-                    data = data.encode('utf-8', errors=errors)
+                    data = to_bytes(data)
                 cmd.stdin.write(data)
                 cmd.stdin.close()
 
@@ -2226,9 +2233,10 @@ class AnsibleModule(object):
             rc = cmd.returncode
         except (OSError, IOError):
             e = get_exception()
-            self.fail_json(rc=e.errno, msg=str(e), cmd=clean_args)
-        except:
-            self.fail_json(rc=257, msg=traceback.format_exc(), cmd=clean_args)
+            self.fail_json(rc=e.errno, msg=to_native(e), cmd=clean_args)
+        except Exception:
+            e = get_exception()
+            self.fail_json(rc=257, msg=to_native(e), exception=traceback.format_exc(), cmd=clean_args)
 
         # Restore env settings
         for key, val in old_env_vals.items():

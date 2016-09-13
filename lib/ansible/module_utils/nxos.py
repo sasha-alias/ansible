@@ -18,21 +18,50 @@
 #
 
 import re
+import time
 import collections
 
-from ansible.module_utils.basic import json, get_exception
-from ansible.module_utils.network import NetworkModule, NetworkError, ModuleStub
+from ansible.module_utils.basic import json, json_dict_bytes_to_unicode
+from ansible.module_utils.network import ModuleStub, NetworkError, NetworkModule
 from ansible.module_utils.network import add_argument, register_transport, to_list
 from ansible.module_utils.shell import CliBase
-from ansible.module_utils.netcfg import NetworkConfig
-from ansible.module_utils.netcli import Command
 from ansible.module_utils.urls import fetch_url, url_argument_spec
 
 add_argument('use_ssl', dict(default=False, type='bool'))
 add_argument('validate_certs', dict(default=True, type='bool'))
 
+class NxapiConfigMixin(object):
 
-class Nxapi(object):
+    def get_config(self, include_defaults=False, **kwargs):
+        cmd = 'show running-config'
+        if include_defaults:
+            cmd += ' all'
+        if isinstance(self, Nxapi):
+            return self.execute([cmd], output='text')[0]
+        else:
+            return self.execute([cmd])[0]
+
+    def load_config(self, config):
+        checkpoint = 'ansible_%s' % int(time.time())
+        self.execute(['checkpoint %s' % checkpoint], output='text')
+
+        try:
+            self.configure(config)
+        except NetworkError:
+            self.load_checkpoint(checkpoint)
+            raise
+
+        self.execute(['no checkpoint %s' % checkpoint], output='text')
+
+    def save_config(self, **kwargs):
+        self.execute(['copy running-config startup-config'])
+
+    def load_checkpoint(self, checkpoint):
+        self.execute(['rollback running-config checkpoint %s' % checkpoint,
+                      'no checkpoint %s' % checkpoint], output='text')
+
+
+class Nxapi(NxapiConfigMixin):
 
     OUTPUT_TO_COMMAND_TYPE = {
         'text': 'cli_show_ascii',
@@ -102,6 +131,8 @@ class Nxapi(object):
         self._nxapi_auth = None
         self._connected = False
 
+    ### Command methods ###
+
     def execute(self, commands, output=None, **kwargs):
         commands = collections.deque(commands)
         output = output or self.default_output
@@ -114,14 +145,14 @@ class Nxapi(object):
         while commands:
             stack.append(commands.popleft())
             if len(stack) == 10:
-                data = self._get_body(stack, output)
-                data = self._jsonify(data)
+                body = self._get_body(stack, output)
+                data = self._jsonify(body)
                 requests.append(data)
                 stack = list()
 
         if stack:
-            data = self._get_body(stack, output)
-            data = self._jsonify(data)
+            body = self._get_body(stack, output)
+            data = self._jsonify(body)
             requests.append(data)
 
         headers = {'Content-Type': 'application/json'}
@@ -153,9 +184,7 @@ class Nxapi(object):
 
         return result
 
-    ### implemention of netcli.Cli ###
-
-    def run_commands(self, commands):
+    def run_commands(self, commands, **kwargs):
         output = None
         cmds = list()
         responses = list()
@@ -164,6 +193,7 @@ class Nxapi(object):
             if output and output != cmd.output:
                 responses.extend(self.execute(cmds, output=output))
                 cmds = list()
+
             output = cmd.output
             cmds.append(str(cmd))
 
@@ -173,27 +203,11 @@ class Nxapi(object):
         return responses
 
 
-    ### end of netcli.Cli ###
-
-    ### implemention of netcfg.Config ###
+    ### Config methods ###
 
     def configure(self, commands):
         commands = to_list(commands)
         return self.execute(commands, output='config')
-
-    def get_config(self, **kwargs):
-        cmd = 'show running-config'
-        if kwargs.get('include_defaults'):
-            cmd += ' all'
-        return self.execute([cmd], output='text')[0]
-
-    def load_config(self, config, **kwargs):
-        return self.configure(config)
-
-    def save_config(self, **kwargs):
-        self.execute(['copy running-config startup-config'])
-
-    ### end netcfg.Config ###
 
     def _jsonify(self, data):
         for encoding in ("utf-8", "latin-1"):
@@ -213,9 +227,7 @@ class Nxapi(object):
 Nxapi = register_transport('nxapi')(Nxapi)
 
 
-class Cli(CliBase):
-
-    NET_PASSWD_RE = re.compile(r"[\r\n]?password: $", re.I)
+class Cli(NxapiConfigMixin, CliBase):
 
     CLI_PROMPTS_RE = [
         re.compile(r'[\r\n]?[a-zA-Z]{1}[a-zA-Z0-9-]*[>|#|%](?:\s*)$'),
@@ -235,11 +247,13 @@ class Cli(CliBase):
         re.compile(r"unknown command")
     ]
 
+    NET_PASSWD_RE = re.compile(r"[\r\n]?password: $", re.I)
+
     def connect(self, params, **kwargs):
         super(Cli, self).connect(params, kickstart=False, **kwargs)
         self.shell.send('terminal length 0')
 
-    ### implementation of netcli.Cli ###
+    ### Command methods ###
 
     def run_commands(self, commands):
         cmds = list(prepare_commands(commands))
@@ -255,7 +269,7 @@ class Cli(CliBase):
                     )
         return responses
 
-    ### implemented by netcfg.Config ###
+    ### Config methods ###
 
     def configure(self, commands, **kwargs):
         commands = prepare_config(commands)
@@ -263,29 +277,21 @@ class Cli(CliBase):
         responses.pop(0)
         return responses
 
-    def get_config(self, include_defaults=False, **kwargs):
-        cmd = 'show running-config'
-        if kwargs.get('include_defaults'):
-            cmd += ' all'
-        return self.execute([cmd])[0]
-
-    def load_config(self, commands, **kwargs):
-        return self.configure(commands)
-
-    def save_config(self):
-        self.execute(['copy running-config startup-config'])
-
 Cli = register_transport('cli', default=True)(Cli)
 
+
 def prepare_config(commands):
-    commands = to_list(commands)
-    commands.insert(0, 'configure')
-    commands.append('end')
-    return commands
+    prepared = ['config']
+    prepared.extend(to_list(commands))
+    prepared.append('end')
+    return prepared
+
 
 def prepare_commands(commands):
     jsonify = lambda x: '%s | json' % x
     for cmd in to_list(commands):
         if cmd.output == 'json':
             cmd.command_string = jsonify(cmd)
+        if cmd.command.endswith('| json'):
+            cmd.output = 'json'
         yield cmd

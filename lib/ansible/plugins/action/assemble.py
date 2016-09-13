@@ -24,10 +24,10 @@ import tempfile
 import re
 
 from ansible.errors import AnsibleError
+from ansible.module_utils._text import to_native, to_text
 from ansible.plugins.action import ActionBase
 from ansible.utils.boolean import boolean
 from ansible.utils.hashing import checksum_s
-from ansible.utils.unicode import to_str, to_unicode
 
 
 class ActionModule(ActionBase):
@@ -42,14 +42,14 @@ class ActionModule(ActionBase):
         delimit_me = False
         add_newline = False
 
-        for f in (to_unicode(p, errors='strict') for p in sorted(os.listdir(src_path))):
+        for f in (to_text(p, errors='surrogate_or_strict') for p in sorted(os.listdir(src_path))):
             if compiled_regexp and not compiled_regexp.search(f):
                 continue
             fragment = u"%s/%s" % (src_path, f)
             if not os.path.isfile(fragment) or (ignore_hidden and os.path.basename(fragment).startswith('.')):
                 continue
 
-            fragment_content = file(self._loader.get_real_file(fragment)).read()
+            fragment_content = open(self._loader.get_real_file(fragment)).read()
 
             # always put a newline between fragments if the previous fragment didn't end with a newline.
             if add_newline:
@@ -114,7 +114,7 @@ class ActionModule(ActionBase):
                 src = self._find_needle('files', src)
             except AnsibleError as e:
                 result['failed'] = True
-                result['msg'] = to_str(e)
+                result['msg'] = to_native(e)
                 return result
 
         if not os.path.isdir(src):
@@ -159,7 +159,7 @@ class ActionModule(ActionBase):
             xfered = self._transfer_file(path, remote_path)
 
             # fix file permissions when the copy is done as a different user
-            self._fixup_perms((tmp, remote_path), remote_user)
+            self._fixup_perms2((tmp, remote_path), remote_user)
 
             new_module_args.update( dict( src=xfered,))
 

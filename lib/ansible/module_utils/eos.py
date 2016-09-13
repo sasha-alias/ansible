@@ -27,23 +27,25 @@
 #
 
 import re
+import time
 
-from ansible.module_utils.basic import json, get_exception
-from ansible.module_utils.network import NetworkModule, NetworkError, ModuleStub
+from ansible.module_utils.basic import json
+from ansible.module_utils.network import ModuleStub, NetworkError, NetworkModule
 from ansible.module_utils.network import add_argument, register_transport, to_list
-from ansible.module_utils.netcfg import NetworkConfig
 from ansible.module_utils.netcli import Command
 from ansible.module_utils.shell import CliBase
 from ansible.module_utils.urls import fetch_url, url_argument_spec
+from ansible.module_utils.netcli import Command
 
 EAPI_FORMATS = ['json', 'text']
 
 add_argument('use_ssl', dict(default=True, type='bool'))
 add_argument('validate_certs', dict(default=True, type='bool'))
 
+
 class EosConfigMixin(object):
 
-    ### implementation of netcfg.Config ###
+    ### Config methods ###
 
     def configure(self, commands, **kwargs):
         cmds = ['configure terminal']
@@ -58,19 +60,12 @@ class EosConfigMixin(object):
             cmd += ' all'
         return self.execute([cmd])[0]
 
-    def load_config(self, config, session, commit=False, replace=False, **kwargs):
+    def load_config(self, config, commit=False, replace=False):
         """ Loads the configuration into the remote device
-
-        This method handles the actual loading of the config
-        commands into the remote EOS device.  By default the
-        config specified is merged with the current running-config.
-
-        :param config: ordered list of config commands to load
-        :param replace: replace current config when True otherwise merge
-
-        :returns list: ordered set of responses from device
         """
+        session = 'ansible_%s' % int(time.time())
         commands = ['configure session %s' % session]
+
         if replace:
             commands.append('rollback clean-config')
 
@@ -84,22 +79,29 @@ class EosConfigMixin(object):
             diff = self.diff_config(session)
             if commit:
                 self.commit_config(session)
+            else:
+                self.execute(['no configure session %s' % session])
         except NetworkError:
             self.abort_config(session)
             diff = None
             raise
+
         return diff
 
     def save_config(self):
         self.execute(['copy running-config startup-config'])
 
-    ### end netcfg.Config ###
-
     def diff_config(self, session):
         commands = ['configure session %s' % session,
                     'show session-config diffs',
                     'end']
-        response = self.execute(commands)
+
+        if isinstance(self, Eapi):
+            response = self.execute(commands, output='text')
+            response[-2] = response[-2].get('output').strip()
+        else:
+            response = self.execute(commands)
+
         return response[-2]
 
     def commit_config(self, session):
@@ -122,16 +124,15 @@ class Eapi(EosConfigMixin):
     def _error(self, msg):
         raise NetworkError(msg, url=self.url)
 
-    def _get_body(self, commands, format, reqid=None):
+    def _get_body(self, commands, output, reqid=None):
         """Create a valid eAPI JSON-RPC request message
         """
-
-        if format not in EAPI_FORMATS:
+        if output not in EAPI_FORMATS:
             msg = 'invalid format, received %s, expected one of %s' % \
-                    (format, ','.join(EAPI_FORMATS))
+                    (output, ', '.join(EAPI_FORMATS))
             self._error(msg=msg)
 
-        params = dict(version=1, cmds=commands, format=format)
+        params = dict(version=1, cmds=commands, format=output)
         return dict(jsonrpc='2.0', id=reqid, method='runCmds', params=params)
 
     def connect(self, params, **kwargs):
@@ -166,32 +167,9 @@ class Eapi(EosConfigMixin):
         else:
             self.enable = 'enable'
 
+    ### Command methods ###
 
-    ### implementation of network.Cli ###
-
-    def run_commands(self, commands):
-        output = None
-        cmds = list()
-        responses = list()
-
-        for cmd in commands:
-            if output and output != cmd.output:
-                responses.extend(self.execute(cmds, format=output))
-                cmds = list()
-
-            output = cmd.output
-            cmds.append(str(cmd))
-
-        if cmds:
-            responses.extend(self.execute(cmds, format=output))
-
-        for index, cmd in enumerate(commands):
-            if cmd.output == 'text':
-                responses[index] = responses[index].get('output')
-
-        return responses
-
-    def execute(self, commands, format='json', **kwargs):
+    def execute(self, commands, output='json', **kwargs):
         """Send commands to the device.
         """
         if self.url is None:
@@ -200,7 +178,7 @@ class Eapi(EosConfigMixin):
         if self.enable is not None:
             commands.insert(0, self.enable)
 
-        data = self._get_body(commands, format)
+        data = self._get_body(commands, output)
         data = json.dumps(data)
 
         headers = {'Content-Type': 'application/json-rpc'}
@@ -230,13 +208,41 @@ class Eapi(EosConfigMixin):
 
         return response['result']
 
-    def get_config(self, **kwargs):
-        return self.run_commands(['show running-config'], format='text')[0]
+
+    def run_commands(self, commands, **kwargs):
+        output = None
+        cmds = list()
+        responses = list()
+
+        for cmd in commands:
+            if output and output != cmd.output:
+                responses.extend(self.execute(cmds, output=output))
+                cmds = list()
+
+            output = cmd.output
+            cmds.append(str(cmd))
+
+        if cmds:
+            responses.extend(self.execute(cmds, output=output))
+
+        for index, cmd in enumerate(commands):
+            if cmd.output == 'text':
+                responses[index] = responses[index].get('output')
+
+        return responses
+
+    ### Config methods ###
+
+    def get_config(self, include_defaults=False):
+        cmd = 'show running-config'
+        if include_defaults:
+            cmd += ' all'
+        return self.execute([cmd], output='text')[0]['output']
 
 Eapi = register_transport('eapi')(Eapi)
 
 
-class Cli(CliBase, EosConfigMixin):
+class Cli(EosConfigMixin, CliBase):
 
     CLI_PROMPTS_RE = [
         re.compile(r"[\r\n]?[\w+\-\.:\/\[\]]+(?:\([^\)]+\)){,3}(?:>|#) ?$"),
@@ -265,7 +271,7 @@ class Cli(CliBase, EosConfigMixin):
         passwd = params['auth_pass']
         self.execute(Command('enable', prompt=self.NET_PASSWD_RE, response=passwd))
 
-    ### implementation of network.Cli ###
+    ### Command methods ###
 
     def run_commands(self, commands):
         """execute the ordered set of commands on the remote host
@@ -300,6 +306,7 @@ def prepare_config(commands):
     commands.append('end')
     return commands
 
+
 def prepare_commands(commands):
     """ transforms a list of Command objects to dict
 
@@ -308,9 +315,12 @@ def prepare_commands(commands):
     :returns: list of dict objects
     """
     jsonify = lambda x: '%s | json' % x
-    for cmd in to_list(commands):
-        if cmd.output == 'json':
+    for item in to_list(commands):
+        if item.output == 'json':
             cmd = jsonify(cmd)
+        elif item.command.endswith('| json'):
+            item.output = 'json'
+            cmd = str(item)
         else:
-            cmd = str(cmd)
+            cmd = str(item)
         yield cmd

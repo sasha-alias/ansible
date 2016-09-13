@@ -19,7 +19,6 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-
 import sys
 import base64
 import itertools
@@ -34,24 +33,27 @@ import hashlib
 import string
 from functools import partial
 from random import SystemRandom, shuffle
+from datetime import datetime
 import uuid
 
 import yaml
 from jinja2.filters import environmentfilter
-from ansible.compat.six import iteritems, string_types
-
-from ansible import errors
-from ansible.parsing.yaml.dumper import AnsibleDumper
-from ansible.utils.hashing import md5s, checksum_s
-from ansible.utils.unicode import unicode_wrap, to_unicode
-from ansible.utils.vars import merge_hash
-from ansible.vars.hostvars import HostVars
 
 try:
     import passlib.hash
     HAS_PASSLIB = True
 except:
     HAS_PASSLIB = False
+
+from ansible import errors
+from ansible.compat.six import iteritems, string_types
+from ansible.compat.six.moves import reduce
+from ansible.module_utils._text import to_text
+from ansible.parsing.yaml.dumper import AnsibleDumper
+from ansible.utils.hashing import md5s, checksum_s
+from ansible.utils.unicode import unicode_wrap
+from ansible.utils.vars import merge_hash
+from ansible.vars.hostvars import HostVars
 
 
 UUID_NAMESPACE_ANSIBLE = uuid.UUID('361E6D51-FAEC-444A-9079-341386DA8E2E')
@@ -70,12 +72,12 @@ class AnsibleJSONEncoder(json.JSONEncoder):
 def to_yaml(a, *args, **kw):
     '''Make verbose, human readable yaml'''
     transformed = yaml.dump(a, Dumper=AnsibleDumper, allow_unicode=True, **kw)
-    return to_unicode(transformed)
+    return to_text(transformed)
 
 def to_nice_yaml(a, indent=4, *args, **kw):
     '''Make verbose, human readable yaml'''
     transformed = yaml.dump(a, Dumper=AnsibleDumper, indent=indent, allow_unicode=True, default_flow_style=False, **kw)
-    return to_unicode(transformed)
+    return to_text(transformed)
 
 def to_json(a, *args, **kw):
     ''' Convert the value to JSON '''
@@ -115,18 +117,22 @@ def to_bool(a):
     else:
         return False
 
+def to_datetime(string, format="%Y-%d-%m %H:%M:%S"):
+    return datetime.strptime(string, format)
+
+
 def quote(a):
     ''' return its argument quoted for shell usage '''
     return pipes.quote(a)
 
 def fileglob(pathname):
-    ''' return list of matched files for glob '''
-    return glob.glob(pathname)
+    ''' return list of matched regular files for glob '''
+    return [ g for g in glob.glob(pathname) if os.path.isfile(g) ]
 
 def regex_replace(value='', pattern='', replacement='', ignorecase=False):
     ''' Perform a `re.sub` returning a string '''
 
-    value = to_unicode(value, errors='strict', nonstring='simplerepr')
+    value = to_text(value, errors='surrogate_or_strict', nonstring='simplerepr')
 
     if ignorecase:
         flags = re.I
@@ -186,6 +192,11 @@ def ternary(value, true_val, false_val):
 def regex_escape(string):
     '''Escape all regular expressions special characters from STRING.'''
     return re.escape(string)
+
+def from_yaml(data):
+    if isinstance(data, string_types):
+        return yaml.safe_load(data)
+    return data
 
 @environmentfilter
 def rand(environment, end, start=None, step=None):
@@ -330,8 +341,14 @@ def comment(text, style='plain', **kw):
     str_beginning = ''
     if p['beginning']:
         str_beginning = "%s%s" % (p['beginning'], p['newline'])
-    str_prefix = str(
-        "%s%s" % (p['prefix'], p['newline'])) * int(p['prefix_count'])
+    str_prefix = ''
+    if p['prefix']:
+        if p['prefix'] != p['newline']:
+            str_prefix = str(
+                "%s%s" % (p['prefix'], p['newline'])) * int(p['prefix_count'])
+        else:
+            str_prefix = str(
+                "%s" % (p['newline'])) * int(p['prefix_count'])
     str_text = ("%s%s" % (
         p['decoration'],
         # Prepend each line of the text with the decorator
@@ -390,7 +407,10 @@ class FilterModule(object):
             # yaml
             'to_yaml': to_yaml,
             'to_nice_yaml': to_nice_yaml,
-            'from_yaml': yaml.safe_load,
+            'from_yaml': from_yaml,
+
+            #date
+            'to_datetime': to_datetime,
 
             # path
             'basename': partial(unicode_wrap, os.path.basename),

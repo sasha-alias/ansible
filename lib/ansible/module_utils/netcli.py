@@ -28,11 +28,11 @@
 
 import re
 import time
-import itertools
 import shlex
 
 from ansible.module_utils.basic import BOOLEANS_TRUE, BOOLEANS_FALSE
-from ansible.module_utils.six import string_types
+from ansible.module_utils.six import string_types, text_type
+from ansible.module_utils.six.moves import zip
 
 def to_list(val):
     if isinstance(val, (list, tuple)):
@@ -65,20 +65,17 @@ class Cli(object):
 
     def __call__(self, commands, output=None):
         objects = list()
-        for cmd in commands:
+        for cmd in to_list(commands):
             objects.append(self.to_command(cmd, output))
         return self.connection.run_commands(objects)
 
-    def to_command(self, command, output=None, prompt=None, response=None):
+    def to_command(self, command, output=None, prompt=None, response=None, **kwargs):
         output = output or self.default_output
         if isinstance(command, Command):
             return command
-        elif isinstance(command, dict):
-            output = cmd.get('output') or output
-            cmd = cmd['command']
         if isinstance(prompt, string_types):
             prompt = re.compile(re.escape(prompt))
-        return Command(command, output, prompt=prompt, response=response)
+        return Command(command, output, prompt=prompt, response=response, **kwargs)
 
     def add_commands(self, commands, output=None, **kwargs):
         for cmd in commands:
@@ -86,7 +83,7 @@ class Cli(object):
 
     def run_commands(self):
         responses = self.connection.run_commands(self._commands)
-        for resp, cmd in itertools.izip(responses, self._commands):
+        for resp, cmd in zip(responses, self._commands):
             cmd.response = resp
 
         # wipe out the commands list to avoid issues if additional
@@ -97,8 +94,8 @@ class Cli(object):
 
 class Command(object):
 
-    def __init__(self, command, output=None, prompt=None, is_reboot=False,
-                 response=None, delay=0):
+    def __init__(self, command, output=None, prompt=None, response=None,
+                 **kwargs):
 
         self.command = command
         self.output = output
@@ -107,8 +104,7 @@ class Command(object):
         self.prompt = prompt
         self.response = response
 
-        self.is_reboot = is_reboot
-        self.delay = delay
+        self.args = kwargs
 
     def __str__(self):
         return self.command_string
@@ -128,27 +124,21 @@ class CommandRunner(object):
 
         self.match = 'all'
 
-        self._cache = dict()
         self._default_output = module.connection.default_output
 
 
-    def add_command(self, command, output=None, prompt=None, response=None):
+    def add_command(self, command, output=None, prompt=None, response=None,
+                    **kwargs):
         if command in [str(c) for c in self.commands]:
             raise AddCommandError('duplicated command detected', command=command)
         cmd = self.module.cli.to_command(command, output=output, prompt=prompt,
-                                         response=response)
+                                         response=response, **kwargs)
         self.commands.append(cmd)
 
     def get_command(self, command, output=None):
-        output = output or self._default_output
-        try:
-            cmdobj = self._cache[(command, output)]
-            return cmdobj.response
-        except KeyError:
-            for cmd in self.commands:
-                if cmd.command == command and cmd.output == output:
-                    self._cache[(command, output)] = cmd
-                    return cmd.response
+        for cmd in self.commands:
+            if cmd.command == command:
+                return cmd.response
         raise ValueError("command '%s' not found" % command)
 
     def get_responses(self):
@@ -199,7 +189,7 @@ class Conditional(object):
 
         key, op, val = shlex.split(conditional)
         self.key = key
-        self.func = self.func(op)
+        self.func = self._func(op)
         self.value = self._cast_value(val)
 
     def __call__(self, data):
@@ -216,9 +206,9 @@ class Conditional(object):
         elif re.match(r'^\d+$', value):
             return int(value)
         else:
-            return unicode(value)
+            return text_type(value)
 
-    def func(self, oper):
+    def _func(self, oper):
         for func, operators in self.OPERATORS.items():
             if oper in operators:
                 return getattr(self, func)
@@ -298,4 +288,3 @@ class Conditional(object):
     def matches(self, value):
         match = re.search(value, self.value, re.M)
         return match is not None
-

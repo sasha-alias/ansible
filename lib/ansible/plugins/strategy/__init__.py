@@ -19,32 +19,22 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-import json
-import time
-import zlib
-from collections import defaultdict
-from multiprocessing import Lock
-
 from jinja2.exceptions import UndefinedError
 
 from ansible.compat.six.moves import queue as Queue
-from ansible.compat.six import iteritems, text_type, string_types
-from ansible import constants as C
+from ansible.compat.six import iteritems, string_types
 from ansible.errors import AnsibleError, AnsibleParserError, AnsibleUndefinedVariable
-from ansible.executor.play_iterator import PlayIterator
-from ansible.executor.process.worker import WorkerProcess
 from ansible.executor.task_result import TaskResult
 from ansible.inventory.host import Host
 from ansible.inventory.group import Group
-from ansible.module_utils.facts import Facts
 from ansible.playbook.helpers import load_list_of_blocks
 from ansible.playbook.included_file import IncludedFile
 from ansible.playbook.task_include import TaskInclude
-from ansible.plugins import action_loader, connection_loader, filter_loader, lookup_loader, module_loader, test_loader
+from ansible.playbook.role_include import IncludeRole
+from ansible.plugins import action_loader
 from ansible.template import Templar
-from ansible.utils.unicode import to_unicode
-from ansible.vars.unsafe_proxy import wrap_var
 from ansible.vars import combine_vars, strip_internal_keys
+from ansible.module_utils._text import to_text
 
 
 try:
@@ -54,41 +44,6 @@ except ImportError:
     display = Display()
 
 __all__ = ['StrategyBase']
-
-if 'action_write_locks' not in globals():
-    # Do not initialize this more than once because it seems to bash
-    # the existing one.  multiprocessing must be reloading the module
-    # when it forks?
-    action_write_locks = dict()
-
-    # Below is a Lock for use when we weren't expecting a named module.
-    # It gets used when an action plugin directly invokes a module instead
-    # of going through the strategies.  Slightly less efficient as all
-    # processes with unexpected module names will wait on this lock
-    action_write_locks[None] = Lock()
-
-    # These plugins are called directly by action plugins (not going through
-    # a strategy).  We precreate them here as an optimization
-    mods = set(p['name'] for p in Facts.PKG_MGRS)
-    mods.update(('copy', 'file', 'setup', 'slurp', 'stat'))
-    for mod_name in mods:
-        action_write_locks[mod_name] = Lock()
-
-# TODO: this should probably be in the plugins/__init__.py, with
-#       a smarter mechanism to set all of the attributes based on
-#       the loaders created there
-class SharedPluginLoaderObj:
-    '''
-    A simple object to make pass the various plugin loaders to
-    the forked processes over the queue easier
-    '''
-    def __init__(self):
-        self.action_loader = action_loader
-        self.connection_loader = connection_loader
-        self.filter_loader = filter_loader
-        self.test_loader   = test_loader
-        self.lookup_loader = lookup_loader
-        self.module_loader = module_loader
 
 
 class StrategyBase:
@@ -101,7 +56,6 @@ class StrategyBase:
     def __init__(self, tqm):
         self._tqm               = tqm
         self._inventory         = tqm.get_inventory()
-        self._workers           = tqm.get_workers()
         self._notified_handlers = tqm._notified_handlers
         self._listening_handlers = tqm._listening_handlers
         self._variable_manager  = tqm.get_variable_manager()
@@ -114,7 +68,6 @@ class StrategyBase:
 
         # internal counters
         self._pending_results   = 0
-        self._cur_worker        = 0
 
         # this dictionary is used to keep track of hosts that have
         # outstanding tasks still in queue
@@ -165,58 +118,10 @@ class StrategyBase:
 
     def _queue_task(self, host, task, task_vars, play_context):
         ''' handles queueing the task up to be sent to a worker '''
+        self._tqm.queue_task(host, task, task_vars, play_context)
+        self._pending_results += 1
 
-        display.debug("entering _queue_task() for %s/%s" % (host.name, task.action))
-
-        # Add a write lock for tasks.
-        # Maybe this should be added somewhere further up the call stack but
-        # this is the earliest in the code where we have task (1) extracted
-        # into its own variable and (2) there's only a single code path
-        # leading to the module being run.  This is called by three
-        # functions: __init__.py::_do_handler_run(), linear.py::run(), and
-        # free.py::run() so we'd have to add to all three to do it there.
-        # The next common higher level is __init__.py::run() and that has
-        # tasks inside of play_iterator so we'd have to extract them to do it
-        # there.
-
-        global action_write_locks
-        if task.action not in action_write_locks:
-            display.debug('Creating lock for %s' % task.action)
-            action_write_locks[task.action] = Lock()
-
-        # and then queue the new task
-        try:
-
-            # create a dummy object with plugin loaders set as an easier
-            # way to share them with the forked processes
-            shared_loader_obj = SharedPluginLoaderObj()
-
-            queued = False
-            starting_worker = self._cur_worker
-            while True:
-                (worker_prc, rslt_q) = self._workers[self._cur_worker]
-                if worker_prc is None or not worker_prc.is_alive():
-                    worker_prc = WorkerProcess(self._final_q, task_vars, host, task, play_context, self._loader, self._variable_manager, shared_loader_obj)
-                    self._workers[self._cur_worker][0] = worker_prc
-                    worker_prc.start()
-                    display.debug("worker is %d (out of %d available)" % (self._cur_worker+1, len(self._workers)))
-                    queued = True
-                self._cur_worker += 1
-                if self._cur_worker >= len(self._workers):
-                    self._cur_worker = 0
-                if queued:
-                    break
-                elif self._cur_worker == starting_worker:
-                    time.sleep(0.0001)
-
-            self._pending_results += 1
-        except (EOFError, IOError, AssertionError) as e:
-            # most likely an abort
-            display.debug("got an error while queuing: %s" % e)
-            return
-        display.debug("exiting _queue_task() for %s/%s" % (host.name, task.action))
-
-    def _process_pending_results(self, iterator, one_pass=False):
+    def _process_pending_results(self, iterator, one_pass=False, timeout=0.001):
         '''
         Reads results off the final queue and takes appropriate action
         based on the result (executing callbacks, updating state, etc.).
@@ -225,7 +130,7 @@ class StrategyBase:
         ret_results = []
 
         def get_original_host(host_name):
-            host_name = to_unicode(host_name)
+            host_name = to_text(host_name)
             if host_name in self._inventory._hosts_cache:
                 return self._inventory._hosts_cache[host_name]
             else:
@@ -248,7 +153,7 @@ class StrategyBase:
                             target_handler_name = templar.template(handler_task.get_name())
                             if target_handler_name == handler_name:
                                 return handler_task
-                    except (UndefinedError, AnsibleUndefinedVariable) as e:
+                    except (UndefinedError, AnsibleUndefinedVariable):
                         # We skip this handler due to the fact that it may be using
                         # a variable in the name that was conditionally included via
                         # set_fact or some other method, and we don't want to error
@@ -258,7 +163,7 @@ class StrategyBase:
 
         def parent_handler_match(target_handler, handler_name):
             if target_handler:
-                if isinstance(target_handler, TaskInclude):
+                if isinstance(target_handler, (TaskInclude, IncludeRole)):
                     try:
                         handler_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, task=target_handler)
                         templar = Templar(loader=self._loader, variables=handler_vars)
@@ -269,16 +174,16 @@ class StrategyBase:
                             target_handler_name = templar.template(target_handler.get_name())
                             if target_handler_name == handler_name:
                                 return True
-                    except (UndefinedError, AnsibleUndefinedVariable) as e:
+                    except (UndefinedError, AnsibleUndefinedVariable):
                         pass
                 return parent_handler_match(target_handler._parent, handler_name)
             else:
                 return False
 
-        passes = 0
-        while not self._tqm._terminated:
+        passes = 1
+        while not self._tqm._terminated and passes < 3:
             try:
-                task_result = self._final_q.get(timeout=0.001)
+                task_result = self._final_q.get(timeout=timeout)
                 original_host = get_original_host(task_result._host)
                 original_task = iterator.get_original_task(original_host, task_result._task)
                 task_result._host = original_host
@@ -294,6 +199,9 @@ class StrategyBase:
                     elif task_result.is_skipped():
                         self._tqm.send_callback('v2_runner_item_on_skipped', task_result)
                     else:
+                        if 'diff' in task_result._result:
+                            if self._diff:
+                                self._tqm.send_callback('v2_on_file_diff', task_result)
                         self._tqm.send_callback('v2_runner_item_on_ok', task_result)
                     continue
 
@@ -428,7 +336,7 @@ class StrategyBase:
                                     # find the host we're actually refering too here, which may
                                     # be a host that is not really in inventory at all
                                     if original_task.delegate_to is not None and original_task.delegate_facts:
-                                        task_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, host=host, task=task)
+                                        task_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, host=host, task=original_task)
                                         self.add_tqm_variables(task_vars, play=iterator._play)
                                         if item is not None:
                                             task_vars[loop_var] = item
@@ -463,7 +371,7 @@ class StrategyBase:
                         if self._diff:
                             self._tqm.send_callback('v2_on_file_diff', task_result)
 
-                    if original_task.action != 'include':
+                    if original_task.action not in ['include', 'include_role']:
                         self._tqm._stats.increment('ok', original_host.name)
                         if 'changed' in task_result._result and task_result._result['changed']:
                             self._tqm._stats.increment('changed', original_host.name)
@@ -477,7 +385,7 @@ class StrategyBase:
 
                 # If this is a role task, mark the parent role as being run (if
                 # the task was ok or failed, but not skipped or unreachable)
-                if original_task._role is not None and role_ran:
+                if original_task._role is not None and role_ran: #TODO:  and original_task.action != 'include_role':?
                     # lookup the role in the ROLE_CACHE to make sure we're dealing
                     # with the correct object and mark it as executed
                     for (entry, role_obj) in iteritems(iterator._play.ROLE_CACHE[original_task._role._role_name]):
@@ -488,8 +396,6 @@ class StrategyBase:
 
             except Queue.Empty:
                 passes += 1
-                if passes > 2:
-                   break
 
             if one_pass:
                 break
@@ -505,13 +411,17 @@ class StrategyBase:
         ret_results = []
 
         display.debug("waiting for pending results...")
+        dead_check = 10
         while self._pending_results > 0 and not self._tqm._terminated:
-
-            if self._tqm.has_dead_workers():
-                raise AnsibleError("A worker was found in a dead state")
 
             results = self._process_pending_results(iterator)
             ret_results.extend(results)
+
+            dead_check -= 1
+            if dead_check == 0:
+                if self._pending_results > 0 and self._tqm.has_dead_workers():
+                    raise AnsibleError("A worker was found in a dead state")
+                dead_check = 10
 
         display.debug("no more pending results, returning what we have")
 
@@ -560,6 +470,9 @@ class StrategyBase:
         # patterns may have referenced the group
         self._inventory.clear_pattern_cache()
 
+        # clear cache of group dict, which is used in magic host variables
+        self._inventory.clear_group_dict_cache()
+
         # also clear the hostvar cache entry for the given play, so that
         # the new hosts are available if hostvars are referenced
         self._variable_manager.invalidate_hostvars_cache(play=iterator._play)
@@ -580,6 +493,9 @@ class StrategyBase:
         group_name = result_item.get('add_group')
         new_group = self._inventory.get_group(group_name)
         if not new_group:
+            # clear cache of group dict, which is used in magic host variables
+            self._inventory.clear_group_dict_cache()
+
             # create the new group and add it to inventory
             new_group = Group(name=group_name)
             self._inventory.add_group(new_group)
@@ -646,13 +562,12 @@ class StrategyBase:
             # mark all of the hosts including this file as failed, send callbacks,
             # and increment the stats for this host
             for host in included_file._hosts:
-                tr = TaskResult(host=host, task=included_file._task, return_data=dict(failed=True, reason=to_unicode(e)))
+                tr = TaskResult(host=host, task=included_file._task, return_data=dict(failed=True, reason=to_text(e)))
                 iterator.mark_host_failed(host)
                 self._tqm._failed_hosts[host.name] = True
                 self._tqm._stats.increment('failures', host.name)
                 self._tqm.send_callback('v2_runner_on_failed', tr)
             return []
-
 
         # finally, send the callback and return the list of blocks loaded
         self._tqm.send_callback('v2_playbook_on_include', included_file)
@@ -780,28 +695,63 @@ class StrategyBase:
 
         return ret
 
-    def _execute_meta(self, task, play_context, iterator):
+    def _execute_meta(self, task, play_context, iterator, target_host=None):
 
         # meta tasks store their args in the _raw_params field of args,
         # since they do not use k=v pairs, so get that
         meta_action = task.args.get('_raw_params')
 
-        if meta_action == 'noop':
-            # FIXME: issue a callback for the noop here?
-            pass
-        elif meta_action == 'flush_handlers':
-            self.run_handlers(iterator, play_context)
-        elif meta_action == 'refresh_inventory':
-            self._inventory.refresh_inventory()
-        elif meta_action == 'clear_facts':
-            for host in iterator._host_states:
-                self._variable_manager.clear_facts(host)
-        #elif meta_action == 'reset_connection':
-        #    connection_info.connection.close()
-        elif meta_action == 'clear_host_errors':
-            self._tqm._failed_hosts = dict()
-            self._tqm._unreachable_hosts = dict()
-            for host in iterator._host_states:
-                iterator._host_states[host].fail_state = iterator.FAILED_NONE
+        # FIXME(s):
+        # * raise an error or show a warning when a conditional is used
+        #   on a meta task that doesn't support them
+
+        def _evaluate_conditional(h):
+            all_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, host=host, task=task)
+            templar = Templar(loader=self._loader, variables=all_vars)
+            return task.evaluate_conditional(templar, all_vars)
+
+        if target_host:
+            host_list = [target_host]
         else:
-            raise AnsibleError("invalid meta action requested: %s" % meta_action, obj=task._ds)
+            host_list = [host for host in self._inventory.get_hosts(iterator._play.hosts) if host.name not in self._tqm._unreachable_hosts]
+
+        results = []
+        for host in host_list:
+            result = None
+            if meta_action == 'noop':
+                # FIXME: issue a callback for the noop here?
+                result = TaskResult(host, task, dict(changed=False, msg="noop"))
+            elif meta_action == 'flush_handlers':
+                self.run_handlers(iterator, play_context)
+            elif meta_action == 'refresh_inventory':
+                self._inventory.refresh_inventory()
+                result = TaskResult(host, task, dict(changed=False, msg="inventory successfully refreshed"))
+            elif meta_action == 'clear_facts':
+                if _evaluate_conditional(host):
+                    self._variable_manager.clear_facts(target_host)
+                    result = TaskResult(host, task, dict(changed=True, msg="inventory successfully refreshed"))
+                else:
+                    result = TaskResult(host, task, dict(changed=False, skipped=True))
+            elif meta_action == 'clear_host_errors':
+                if _evaluate_conditional(host):
+                    self._tqm._failed_hosts.pop(host.name, False)
+                    self._tqm._unreachable_hosts.pop(host.name, False)
+                    iterator._host_states[host.name].fail_state = iterator.FAILED_NONE
+                    result = TaskResult(host, task, dict(changed=True, msg="successfully cleared host errors"))
+                else:
+                    result = TaskResult(host, task, dict(changed=False, skipped=True))
+            elif meta_action == 'end_play':
+                if _evaluate_conditional(host):
+                    iterator._host_states[host.name].run_state = iterator.ITERATING_COMPLETE
+                    result = TaskResult(host, task, dict(changed=True, msg="ending play"))
+                else:
+                    result = TaskResult(host, task, dict(changed=False, skipped=True))
+            #elif meta_action == 'reset_connection':
+            #    connection_info.connection.close()
+            else:
+                raise AnsibleError("invalid meta action requested: %s" % meta_action, obj=task._ds)
+
+            if result is not None:
+                results.append(result)
+
+        return results

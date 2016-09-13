@@ -32,8 +32,17 @@
     making backwards compatibility guarantees.  The API may change between
     releases.  Do not use this unless you are willing to port your module code.
 """
+import codecs
 
 from ansible.module_utils.six import PY3, text_type, binary_type
+
+
+try:
+    codecs.lookup_error('surrogateescape')
+    HAS_SURROGATEESCAPE = True
+except LookupError:
+    HAS_SURROGATEESCAPE = False
+
 
 def to_bytes(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     """Make sure that a string is a byte string
@@ -47,8 +56,22 @@ def to_bytes(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     :kwarg errors: The error handler to use if the text string is not
         encodable using the specified encoding.  Any valid `codecs error
         handler <https://docs.python.org/2/library/codecs.html#codec-base-classes>`_
-        may be specified. On Python3 this defaults to 'surrogateescape'.  On
-        Python2, this defaults to 'replace'.
+        may be specified. There are two additional error strategies
+        specifically aimed at helping people to port code:
+
+            :surrogate_or_strict: Will use surrogateescape if it is a valid
+                handler, otherwise it will use strict
+            :surrogate_or_replace: Will use surrogateescape if it is a valid
+                handler, otherwise it will use replace.
+
+        Because surrogateescape was added in Python3 this usually means that
+        Python3 will use surrogateescape and Python2 will use the fallback
+        error handler. Note that the code checks for surrogateescape when the
+        module is imported.  If you have a backport of surrogateescape for
+        python2, be sure to register the error handler prior to importing this
+        module.
+
+        The default is `surrogate_or_replace`
     :kwarg nonstring: The strategy to use if a nonstring is specified in
         ``obj``.  Default is 'simplerepr'.  Valid values are:
 
@@ -71,11 +94,16 @@ def to_bytes(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     if isinstance(obj, binary_type):
         return obj
 
-    if errors is None:
-        if PY3:
+    if errors in (None, 'surrogate_or_replace'):
+        if HAS_SURROGATEESCAPE:
             errors = 'surrogateescape'
         else:
             errors = 'replace'
+    elif errors == 'surrogate_or_strict':
+        if HAS_SURROGATEESCAPE:
+            errors = 'surrogateescape'
+        else:
+            errors = 'strict'
 
     if isinstance(obj, text_type):
         return obj.encode(encoding, errors)
@@ -83,7 +111,14 @@ def to_bytes(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     # Note: We do these last even though we have to call to_bytes again on the
     # value because we're optimizing the common case
     if nonstring == 'simplerepr':
-        value = str(obj)
+        try:
+            value = str(obj)
+        except UnicodeError:
+            try:
+                value = repr(obj)
+            except UnicodeError:
+                # Giving up
+                return to_bytes('')
     elif nonstring == 'passthru':
         return obj
     elif nonstring == 'empty':
@@ -95,6 +130,7 @@ def to_bytes(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
         raise TypeError('Invalid value %s for to_bytes\' nonstring parameter' % nonstring)
 
     return to_bytes(value, encoding, errors)
+
 
 def to_text(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     """Make sure that a string is a text string
@@ -126,6 +162,17 @@ def to_text(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     if isinstance(obj, text_type):
         return obj
 
+    if errors in (None, 'surrogate_or_replace'):
+        if HAS_SURROGATEESCAPE:
+            errors = 'surrogateescape'
+        else:
+            errors = 'replace'
+    elif errors == 'surrogate_or_strict':
+        if HAS_SURROGATEESCAPE:
+            errors = 'surrogateescape'
+        else:
+            errors = 'strict'
+
     if errors is None:
         if PY3:
             errors = 'surrogateescape'
@@ -138,7 +185,14 @@ def to_text(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
     # Note: We do these last even though we have to call to_text again on the
     # value because we're optimizing the common case
     if nonstring == 'simplerepr':
-        value = str(obj)
+        try:
+            value = str(obj)
+        except UnicodeError:
+            try:
+                value = repr(obj)
+            except UnicodeError:
+                # Giving up
+                return u''
     elif nonstring == 'passthru':
         return obj
     elif nonstring == 'empty':
@@ -149,6 +203,7 @@ def to_text(obj, encoding='utf-8', errors=None, nonstring='simplerepr'):
         raise TypeError('Invalid value %s for to_text\'s nonstring parameter' % nonstring)
 
     return to_text(value, encoding, errors)
+
 
 #: :py:func:`to_native`
 #:      Transform a variable into the native str type for the python version
