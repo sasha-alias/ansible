@@ -22,13 +22,10 @@ import shlex
 from distutils.version import LooseVersion
 
 from ansible.module_utils.pycompat24 import get_exception
-from ansible.module_utils.network import NetworkError, NetworkModule
 from ansible.module_utils.network import register_transport, to_list
+from ansible.module_utils.network import NetworkError
 from ansible.module_utils.shell import CliBase
 from ansible.module_utils.six import string_types
-
-# temporary fix until modules are update.  to be removed before 2.2 final
-from ansible.module_utils.network import get_module
 
 try:
     from jnpr.junos import Device
@@ -72,6 +69,16 @@ def xml_to_string(val):
 class Netconf(object):
 
     def __init__(self):
+        if not HAS_PYEZ:
+            raise NetworkError(
+                msg='junos-eznc >= 1.2.2 is required but does not appear to be installed.  '
+                'It can be installed using `pip install junos-eznc`'
+            )
+        if not HAS_JXMLEASE:
+            raise NetworkError(
+                msg='jxmlease is required but does not appear to be installed.  '
+                'It can be installed using `pip install jxmlease`'
+            )
         self.device = None
         self.config = None
         self._locked = False
@@ -87,14 +94,22 @@ class Netconf(object):
 
     def connect(self, params, **kwargs):
         host = params['host']
-        port = params.get('port') or 830
 
-        user = params['username']
-        passwd = params['password']
+        kwargs = dict()
+        kwargs['port'] = params.get('port') or 830
+
+        kwargs['user'] = params['username']
+
+        if params['password']:
+            kwargs['passwd'] = params['password']
+
+        if params['ssh_keyfile']:
+            kwargs['ssh_private_key_file'] = params['ssh_keyfile']
+
+        kwargs['gather_facts'] = False
 
         try:
-            self.device = Device(host, user=user, passwd=passwd, port=port,
-                                 gather_facts=False)
+            self.device = Device(host, **kwargs)
             self.device.open()
         except ConnectError:
             exc = get_exception()
@@ -157,9 +172,6 @@ class Netconf(object):
 
     def load_config(self, config, commit=False, replace=False, confirm=None,
                     comment=None, config_format='text'):
-
-    #def load_config(self, candidate, update='merge', comment=None,
-    #                confirm=None, format='text', commit=True):
 
         if replace:
             merge = False
@@ -233,6 +245,18 @@ class Netconf(object):
             exc = get_exception()
             raise NetworkError('unable to commit config: %s' % str(exc))
 
+    def confirm_commit(self, checkonly=False):
+        try:
+            resp = self.rpc('get_commit_information')
+            needs_confirm = 'commit confirmed, rollback' in resp[0][4].text
+            if checkonly:
+                return needs_confirm
+            return self.commit_config()
+        except IndexError:
+            # if there is no comment tag, the system is not in a commit
+            # confirmed state so just return
+            pass
+
     def rollback_config(self, identifier, commit=True, comment=None):
 
         self.lock_config()
@@ -270,7 +294,7 @@ class Cli(CliBase):
             self.execute('cli')
         self.execute('set cli screen-length 0')
 
-    def configure(self, commands, comment=None, **kwargs):
+    def configure(self, commands, comment=None):
         cmds = ['configure']
         cmds.extend(to_list(commands))
 

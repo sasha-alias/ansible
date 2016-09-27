@@ -29,13 +29,12 @@
 import re
 import time
 
-from ansible.module_utils.basic import json
+from ansible.module_utils.basic import json, get_exception
 from ansible.module_utils.network import ModuleStub, NetworkError, NetworkModule
 from ansible.module_utils.network import add_argument, register_transport, to_list
 from ansible.module_utils.netcli import Command
 from ansible.module_utils.shell import CliBase
 from ansible.module_utils.urls import fetch_url, url_argument_spec
-from ansible.module_utils.netcli import Command
 
 EAPI_FORMATS = ['json', 'text']
 
@@ -82,6 +81,11 @@ class EosConfigMixin(object):
             else:
                 self.execute(['no configure session %s' % session])
         except NetworkError:
+            exc = get_exception()
+            if 'timeout trying to send command' in exc.message:
+                # try to get control back and get out of config mode
+                if isinstance(self, Cli):
+                    self.execute(['\x03', 'end'])
             self.abort_config(session)
             diff = None
             raise
@@ -111,6 +115,7 @@ class EosConfigMixin(object):
     def abort_config(self, session):
         commands = ['configure session %s' % session, 'abort']
         self.execute(commands)
+
 
 class Eapi(EosConfigMixin):
 
@@ -178,8 +183,8 @@ class Eapi(EosConfigMixin):
         if self.enable is not None:
             commands.insert(0, self.enable)
 
-        data = self._get_body(commands, output)
-        data = json.dumps(data)
+        body = self._get_body(commands, output)
+        data = json.dumps(body)
 
         headers = {'Content-Type': 'application/json-rpc'}
 
@@ -207,7 +212,6 @@ class Eapi(EosConfigMixin):
             response['result'].pop(0)
 
         return response['result']
-
 
     def run_commands(self, commands, **kwargs):
         output = None
@@ -317,7 +321,7 @@ def prepare_commands(commands):
     jsonify = lambda x: '%s | json' % x
     for item in to_list(commands):
         if item.output == 'json':
-            cmd = jsonify(cmd)
+            cmd = jsonify(item)
         elif item.command.endswith('| json'):
             item.output = 'json'
             cmd = str(item)
