@@ -414,6 +414,7 @@ class VariableManager:
                 #             however this would take work in the templating engine, so for now
                 #             we'll add both so we can give users something transitional to use
                 variables['play_hosts'] = [x.name for x in self._inventory.get_hosts()]
+                variables['ansible_play_batch'] = [x.name for x in self._inventory.get_hosts()]
                 variables['ansible_play_hosts'] = [x.name for x in self._inventory.get_hosts(pattern=play.hosts or 'all', ignore_restrictions=True)]
 
         # the 'omit' value alows params to be left out if the variable they are based on is undefined
@@ -439,8 +440,7 @@ class VariableManager:
         if task.loop is not None:
             if task.loop in lookup_loader:
                 try:
-                    #TODO: remove convert_bare true and deprecate this in with_
-                    loop_terms = listify_lookup_plugin_terms(terms=task.loop_args, templar=templar, loader=loader, fail_on_undefined=True, convert_bare=True)
+                    loop_terms = listify_lookup_plugin_terms(terms=task.loop_args, templar=templar, loader=loader, fail_on_undefined=True, convert_bare=False)
                     items = lookup_loader.get(task.loop, loader=loader, templar=templar).run(terms=loop_terms, variables=vars_copy)
                 except AnsibleUndefinedVariable as e:
                     # This task will be skipped later due to this, so we just setup
@@ -459,6 +459,8 @@ class VariableManager:
 
             templar.set_available_variables(vars_copy)
             delegated_host_name = templar.template(task.delegate_to, fail_on_undefined=False)
+            if not delegated_host_name:
+                raise AnsibleError(message="Undefined delegate_to host for task:", obj=task._ds)
             if delegated_host_name in delegated_host_vars:
                 # no need to repeat ourselves, as the delegate_to value
                 # does not appear to be tied to the loop item variable
