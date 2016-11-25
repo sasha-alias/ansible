@@ -30,9 +30,11 @@ import re
 import getpass
 import signal
 import subprocess
+from abc import ABCMeta, abstractmethod
 
 from ansible.release import __version__
 from ansible import constants as C
+from ansible.compat.six import with_metaclass
 from ansible.errors import AnsibleError, AnsibleOptionsError
 from ansible.module_utils._text import to_bytes, to_text
 
@@ -89,7 +91,7 @@ class InvalidOptsParser(SortedOptParser):
             pass
 
 
-class CLI(object):
+class CLI(with_metaclass(ABCMeta, object)):
     ''' code behind bin/ansible* programs '''
 
     VALID_ACTIONS = ['No Actions']
@@ -144,10 +146,13 @@ class CLI(object):
         fn = getattr(self, "execute_%s" % self.action)
         fn()
 
-    def parse(self):
-        raise Exception("Need to implement!")
-
+    @abstractmethod
     def run(self):
+        """Run the ansible command
+
+        Subclasses must implement this method.  It does the actual work of
+        running an Ansible command.
+        """
 
         if self.options.verbosity > 0:
             if C.CONFIG_FILE:
@@ -155,35 +160,38 @@ class CLI(object):
             else:
                 display.display(u"No config file found; using defaults")
 
-
     @staticmethod
-    def ask_vault_passwords(ask_new_vault_pass=False, rekey=False):
+    def ask_vault_passwords():
         ''' prompt for vault password and/or password change '''
 
         vault_pass = None
-        new_vault_pass = None
         try:
-            if rekey or not ask_new_vault_pass:
-                vault_pass = getpass.getpass(prompt="Vault password: ")
+            vault_pass = getpass.getpass(prompt="Vault password: ")
 
-            if ask_new_vault_pass:
-                new_vault_pass = getpass.getpass(prompt="New Vault password: ")
-                new_vault_pass2 = getpass.getpass(prompt="Confirm New Vault password: ")
-                if new_vault_pass != new_vault_pass2:
-                    raise AnsibleError("Passwords do not match")
         except EOFError:
             pass
 
         # enforce no newline chars at the end of passwords
         if vault_pass:
             vault_pass = to_bytes(vault_pass, errors='strict', nonstring='simplerepr').strip()
+
+        return vault_pass
+
+    @staticmethod
+    def ask_new_vault_passwords():
+        new_vault_pass = None
+        try:
+            new_vault_pass = getpass.getpass(prompt="New Vault password: ")
+            new_vault_pass2 = getpass.getpass(prompt="Confirm New Vault password: ")
+            if new_vault_pass != new_vault_pass2:
+                raise AnsibleError("Passwords do not match")
+        except EOFError:
+            pass
+
         if new_vault_pass:
             new_vault_pass = to_bytes(new_vault_pass, errors='strict', nonstring='simplerepr').strip()
 
-        if ask_new_vault_pass and not rekey:
-            vault_pass = new_vault_pass
-
-        return vault_pass, new_vault_pass
+        return new_vault_pass
 
     def ask_passwords(self):
         ''' prompt for connection and become passwords if needed '''
@@ -314,9 +322,9 @@ class CLI(object):
                 action="callback", callback=CLI.expand_tilde, type=str)
 
         if subset_opts:
-            parser.add_option('-t', '--tags', dest='tags', default='all',
+            parser.add_option('-t', '--tags', dest='tags', default=[], action='append',
                 help="only run plays and tasks tagged with these values")
-            parser.add_option('--skip-tags', dest='skip_tags',
+            parser.add_option('--skip-tags', dest='skip_tags', default=[], action='append',
                 help="only run plays and tasks whose tags do not match these values")
 
         if output_opts:
@@ -404,6 +412,55 @@ class CLI(object):
                 help="clear the fact cache")
 
         return parser
+
+    @abstractmethod
+    def parse(self):
+        """Parse the command line args
+
+        This method parses the command line arguments.  It uses the parser
+        stored in the self.parser attribute and saves the args and options in
+        self.args and self.options respectively.
+
+        Subclasses need to implement this method.  They will usually create
+        a base_parser, add their own options to the base_parser, and then call
+        this method to do the actual parsing.  An implementation will look
+        something like this::
+
+            def parse(self):
+                parser = super(MyCLI, self).base_parser(usage="My Ansible CLI", inventory_opts=True)
+                parser.add_option('--my-option', dest='my_option', action='store')
+                self.parser = parser
+                super(MyCLI, self).parse()
+                # If some additional transformations are needed for the
+                # arguments and options, do it here.
+        """
+        self.options, self.args = self.parser.parse_args(self.args[1:])
+        if hasattr(self.options, 'tags') and not self.options.tags:
+            # optparse defaults does not do what's expected
+            self.options.tags = ['all']
+        if hasattr(self.options, 'tags') and self.options.tags:
+            if not C.MERGE_MULTIPLE_CLI_TAGS:
+                if len(self.options.tags) > 1:
+                    display.deprecated('Specifying --tags multiple times on the command line currently uses the last specified value. In 2.4, values will be merged instead.  Set merge_multiple_cli_tags=True in ansible.cfg to get this behavior now.', version=2.5, removed=False)
+                    self.options.tags = [self.options.tags[-1]]
+
+            tags = set()
+            for tag_set in self.options.tags:
+                for tag in tag_set.split(u','):
+                    tags.add(tag.strip())
+            self.options.tags = list(tags)
+
+        if hasattr(self.options, 'skip_tags') and self.options.skip_tags:
+            if not C.MERGE_MULTIPLE_CLI_TAGS:
+                if len(self.options.skip_tags) > 1:
+                    display.deprecated('Specifying --skip-tags multiple times on the command line currently uses the last specified value. In 2.4, values will be merged instead.  Set merge_multiple_cli_tags=True in ansible.cfg to get this behavior now.', version=2.5, removed=False)
+                    self.options.skip_tags = [self.options.skip_tags[-1]]
+
+            skip_tags = set()
+            for tag_set in self.options.skip_tags:
+                for tag in tag_set.split(u','):
+                    skip_tags.add(tag.strip())
+            self.options.skip_tags = list(skip_tags)
 
     @staticmethod
     def version(prog):

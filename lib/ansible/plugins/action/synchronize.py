@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 # (c) 2012-2013, Timothy Appnel <tim@appnel.com>
@@ -114,7 +113,7 @@ class ActionModule(ActionBase):
         # connection to the remote host
         if 'ansible_syslog_facility' in task_vars:
             del task_vars['ansible_syslog_facility']
-        for key in task_vars.keys():
+        for key in list(task_vars.keys()):
             if key.startswith("ansible_") and key.endswith("_interpreter"):
                 del task_vars[key]
 

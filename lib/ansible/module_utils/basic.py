@@ -5,6 +5,7 @@
 # to the complete work.
 #
 # Copyright (c), Michael DeHaan <michael.dehaan@gmail.com>, 2012-2013
+# Copyright (c), Toshio Kuratomi <tkuratomi@ansible.com> 2016
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without modification,
@@ -32,6 +33,29 @@ BOOLEANS_FALSE = ['n', 'no', 'off', '0', 'false', 0, False]
 BOOLEANS = BOOLEANS_TRUE + BOOLEANS_FALSE
 
 SIZE_RANGES = { 'Y': 1<<80, 'Z': 1<<70, 'E': 1<<60, 'P': 1<<50, 'T': 1<<40, 'G': 1<<30, 'M': 1<<20, 'K': 1<<10, 'B': 1 }
+
+FILE_ATTRIBUTES = {
+  'A': 'noatime',
+  'a': 'append',
+  'c': 'compressed',
+  'C': 'nocow',
+  'd': 'nodump',
+  'D': 'dirsync',
+  'e': 'extents',
+  'E': 'encrypted',
+  'h': 'blocksize',
+  'i': 'immutable',
+  'I': 'indexed',
+  'j': 'journalled',
+  'N': 'inline',
+  's': 'zero',
+  'S': 'synchronous',
+  't': 'notail',
+  'T': 'blockroot',
+  'u': 'undelete',
+  'X': 'compressedraw',
+  'Z': 'compresseddirty',
+}
 
 # ansible modules can be written in any language.  To simplify
 # development of Python modules, the functions available here can
@@ -202,6 +226,7 @@ FILE_COMMON_ARGUMENTS=dict(
     delimiter = dict(), # used by assemble
     directory_mode = dict(), # used by copy
     unsafe_writes  = dict(type='bool'), # should be available to any module using atomic_move
+    attributes = dict(aliases=['attr']),
 )
 
 PASSWD_ARG_RE = re.compile(r'^[-]{0,2}pass[-]?(word|wd)?')
@@ -617,6 +642,19 @@ def _lenient_lowercase(lst):
             lowered.append(value)
     return lowered
 
+def format_attributes(attributes):
+    attribute_list = []
+    for attr in attributes:
+        if attr in FILE_ATTRIBUTES:
+            attribute_list.append(FILE_ATTRIBUTES[attr])
+    return attribute_list
+
+def get_flags_from_attributes(attributes):
+    flags = []
+    for key,attr in FILE_ATTRIBUTES.iteritems():
+        if attr in attributes:
+            flags.append(key)
+    return ''.join(flags)
 
 class AnsibleFallbackNotFound(Exception):
     pass
@@ -758,10 +796,11 @@ class AnsibleModule(object):
             if i is not None and secontext[i] == '_default':
                 secontext[i] = default_secontext[i]
 
+        attributes = params.get('attributes', None)
         return dict(
             path=path, mode=mode, owner=owner, group=group,
             seuser=seuser, serole=serole, setype=setype,
-            selevel=selevel, secontext=secontext,
+            selevel=selevel, secontext=secontext, attributes=attributes,
         )
 
 
@@ -1057,6 +1096,56 @@ class AnsibleModule(object):
                 changed = True
         return changed
 
+    def set_attributes_if_different(self, path, attributes, changed, diff=None):
+
+        if attributes is None:
+            return changed
+
+        b_path = to_bytes(path, errors='surrogate_or_strict')
+        b_path = os.path.expanduser(os.path.expandvars(b_path))
+        existing = self.get_file_attributes(b_path)
+
+        if existing.get('attr_flags','') != attributes:
+            attrcmd = self.get_bin_path('chattr')
+            if attrcmd:
+                attrcmd = [attrcmd, '=%s' % attributes, b_path]
+                changed = True
+
+                if diff is not None:
+                    if 'before' not in diff:
+                        diff['before'] = {}
+                    diff['before']['attributes'] = existing.get('attr_flags')
+                    if 'after' not in diff:
+                        diff['after'] = {}
+                    diff['after']['attributes'] = attributes
+
+                if not self.check_mode:
+                    try:
+                        rc, out, err = self.run_command(attrcmd)
+                        if rc != 0 or err:
+                            raise Exception("Error while setting attributes: %s" % (out + err))
+                    except:
+                        e = get_exception()
+                        self.fail_json(path=path, msg='chattr failed', details=str(e))
+        return changed
+
+    def get_file_attributes(self, path):
+        output = {}
+        attrcmd = self.get_bin_path('lsattr', False)
+        if attrcmd:
+            attrcmd = [attrcmd, '-vd', path]
+            try:
+                rc, out, err = self.run_command(attrcmd)
+                if rc == 0:
+                    res = out.split(' ')[0:2]
+                    output['attr_flags'] =  res[1].replace('-','').strip()
+                    output['version'] = res[0].strip()
+                    output['attributes'] = format_attributes(output['attr_flags'])
+            except:
+                pass
+        return output
+
+
     def _symbolic_mode_to_octal(self, path_stat, symbolic_mode):
         new_mode = stat.S_IMODE(path_stat.st_mode)
 
@@ -1165,6 +1254,9 @@ class AnsibleModule(object):
         )
         changed = self.set_mode_if_different(
             file_args['path'], file_args['mode'], changed, diff
+        )
+        changed = self.set_attributes_if_different(
+            file_args['path'], file_args['attributes'], changed, diff
         )
         return changed
 
@@ -1959,13 +2051,21 @@ class AnsibleModule(object):
                 except (OSError, IOError):
                     e = get_exception()
                     self.fail_json(msg='The destination directory (%s) is not writable by the current user. Error was: %s' % (os.path.dirname(dest), e))
+                except TypeError:
+                    # We expect that this is happening because python3.4.x and
+                    # below can't handle byte strings in mkstemp().  Traceback
+                    # would end in something like:
+                    #     file = _os.path.join(dir, pre + name + suf)
+                    # TypeError: can't concat bytes to str
+                    self.fail_json(msg='Failed creating temp file for atomic move.  This usually happens when using Python3 less than Python3.5.  Please use Python2.x or Python3.5 or greater.', exception=sys.exc_info())
+
                 b_tmp_dest_name = to_bytes(tmp_dest_name, errors='surrogate_or_strict')
 
                 try:
                     try:
                         # close tmp file handle before file operations to prevent text file busy errors on vboxfs synced folders (windows host)
                         os.close(tmp_dest_fd)
-                        # leaves tmp file behind when sudo and  not root
+                        # leaves tmp file behind when sudo and not root
                         if switched_user and os.getuid() != 0:
                             # cleanup will happen by 'rm' of tempdir
                             # copy2 will preserve some metadata
@@ -2030,7 +2130,7 @@ class AnsibleModule(object):
       else:
           self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, exception))
 
-    def run_command(self, args, check_rc=False, close_fds=True, executable=None, data=None, binary_data=False, path_prefix=None, cwd=None, use_unsafe_shell=False, prompt_regex=None, environ_update=None, umask=None):
+    def run_command(self, args, check_rc=False, close_fds=True, executable=None, data=None, binary_data=False, path_prefix=None, cwd=None, use_unsafe_shell=False, prompt_regex=None, environ_update=None, umask=None, encoding='utf-8', errors='surrogate_or_strict'):
         '''
         Execute a command, returns rc, stdout, and stderr.
 
@@ -2052,8 +2152,27 @@ class AnsibleModule(object):
         :kw prompt_regex: Regex string (not a compiled regex) which can be
             used to detect prompts in the stdout which would otherwise cause
             the execution to hang (especially if no input data is specified)
-        :kwarg environ_update: dictionary to *update* os.environ with
+        :kw environ_update: dictionary to *update* os.environ with
         :kw umask: Umask to be used when running the command. Default None
+        :kw encoding: Since we return native strings, on python3 we need to
+            know the encoding to use to transform from bytes to text.  If you
+            want to always get bytes back, use encoding=None.  The default is
+            "utf-8".  This does not affect transformation of strings given as
+            args.
+        :kw errors: Since we return native strings, on python3 we need to
+            transform stdout and stderr from bytes to text.  If the bytes are
+            undecodable in the ``encoding`` specified, then use this error
+            handler to deal with them.  The default is ``surrogate_or_strict``
+            which means that the bytes will be decoded using the
+            surrogateescape error handler if available (available on all
+            python3 versions we support) otherwise a UnicodeError traceback
+            will be raised.  This does not affect transformations of strings
+            given as args.
+        :returns: A 3-tuple of return code (integer), stdout (native string),
+            and stderr (native string).  On python2, stdout and stderr are both
+            byte strings.  On python3, stdout and stderr are text strings converted
+            according to the encoding and errors parameters.  If you want byte
+            strings on python3, use encoding=None to turn decoding to text off.
         '''
 
         shell = False
@@ -2188,11 +2307,7 @@ class AnsibleModule(object):
         try:
 
             if self._debug:
-                if isinstance(args, list):
-                    running = ' '.join(args)
-                else:
-                    running = args
-                self.log('Executing: ' + running)
+                self.log('Executing: ' + clean_args)
             cmd = subprocess.Popen(args, **kwargs)
 
             # the communication logic here is essentially taken from that
@@ -2225,6 +2340,10 @@ class AnsibleModule(object):
                 # if we're checking for prompts, do it now
                 if prompt_re:
                     if prompt_re.search(stdout) and not data:
+                        if encoding:
+                            stdout = to_native(stdout, encoding=encoding, errors=errors)
+                        else:
+                            stdout = stdout
                         return (257, stdout, "A prompt was encountered while running a command, but no input data was specified")
                 # only break out if no pipes are left to read or
                 # the pipes are completely read and
@@ -2268,6 +2387,9 @@ class AnsibleModule(object):
         # reset the pwd
         os.chdir(prev_dir)
 
+        if encoding is not None:
+            return (rc, to_native(stdout, encoding=encoding, errors=errors),
+                    to_native(stderr, encoding=encoding, errors=errors))
         return (rc, stdout, stderr)
 
     def append_to_file(self, filename, str):

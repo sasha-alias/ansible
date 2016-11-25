@@ -60,7 +60,8 @@ class DocCLI(CLI):
         self.parser.add_option("-s", "--snippet", action="store_true", default=False, dest='show_snippet',
                 help='Show playbook snippet for specified module(s)')
 
-        self.options, self.args = self.parser.parse_args(self.args[1:])
+        super(DocCLI, self).parse()
+
         display.verbosity = self.options.verbosity
 
     def run(self):
@@ -100,7 +101,7 @@ class DocCLI(CLI):
                 try:
                     doc, plainexamples, returndocs = module_docs.get_docstring(filename, verbose=(self.options.verbosity > 0))
                 except:
-                    display.vvv(traceback.print_exc())
+                    display.vvv(traceback.format_exc())
                     display.error("module %s has a documentation error formatting or is missing documentation\nTo see exact traceback use -vvv" % module)
                     continue
 
@@ -133,10 +134,11 @@ class DocCLI(CLI):
                     # probably a quoting issue.
                     raise AnsibleError("Parsing produced an empty object.")
             except Exception as e:
-                display.vvv(traceback.print_exc())
+                display.vvv(traceback.format_exc())
                 raise AnsibleError("module %s missing documentation (or could not parse documentation): %s\n" % (module, str(e)))
 
-        self.pager(text)
+        if text:
+            self.pager(text)
         return 0
 
     def find_modules(self, path):

@@ -145,9 +145,9 @@ class Connection(ConnectionBase):
         proxy_command = None
         # Parse ansible_ssh_common_args, specifically looking for ProxyCommand
         ssh_args = [
-            getattr(self._play_context, 'ssh_extra_args', ''),
-            getattr(self._play_context, 'ssh_common_args', ''),
-            getattr(self._play_context, 'ssh_args', ''),
+            getattr(self._play_context, 'ssh_extra_args', '') or '',
+            getattr(self._play_context, 'ssh_common_args', '') or '',
+            getattr(self._play_context, 'ssh_args', '') or '',
         ]
         if ssh_args is not None:
             args = self._split_ssh_args(' '.join(ssh_args))
@@ -310,7 +310,7 @@ class Connection(ConnectionBase):
 
                 if passprompt:
                     if self._play_context.become and self._play_context.become_pass:
-                        chan.sendall(self._play_context.become_pass + '\n')
+                        chan.sendall(to_bytes(self._play_context.become_pass) + b'\n')
                     else:
                         raise AnsibleError("A password is reqired but none was supplied")
                 else:
