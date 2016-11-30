@@ -672,6 +672,7 @@ class AnsibleModule(object):
         see library/* for examples
         '''
 
+        self._name = os.path.basename(__file__) #initialize name until we can parse from options
         self.argument_spec = argument_spec
         self.supports_check_mode = supports_check_mode
         self.check_mode = False
@@ -751,7 +752,7 @@ class AnsibleModule(object):
 
         self._set_defaults(pre=False)
 
-        if not self.no_log and self._verbosity >= 3:
+        if not self.no_log:
             self._log_invocation()
 
         # finally, make sure we're in a sane working dir
@@ -2086,12 +2087,14 @@ class AnsibleModule(object):
                         try:
                             os.rename(b_tmp_dest_name, b_dest)
                         except (shutil.Error, OSError, IOError):
+                            e = get_exception()
                             if unsafe_writes:
-                                self._unsafe_writes(b_tmp_dest_name, b_dest, get_exception())
+                                self._unsafe_writes(b_tmp_dest_name, b_dest, e)
                             else:
-                                self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, exception))
+                                self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
                     except (shutil.Error, OSError, IOError):
-                        self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, exception))
+                        e = get_exception()
+                        self.fail_json(msg='Could not replace file: %s to %s: %s' % (src, dest, e))
                 finally:
                     self.cleanup(b_tmp_dest_name)
 

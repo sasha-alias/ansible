@@ -1,4 +1,5 @@
-# (c) 2012-2014, Michael DeHaan <michael.dehaan@gmail.com>
+#
+# (c) 2016 Red Hat Inc.
 #
 # This file is part of Ansible
 #
@@ -14,16 +15,33 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-
-# Make coding more python3-ish
+#
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+import re
 
-def boolean(value):
-    val = str(value)
-    if val.lower() in [ "true", "t", "y", "1", "yes" ]:
-        return True
-    else:
-        return False
+from ansible.plugins.terminal import TerminalBase
+from ansible.errors import AnsibleConnectionFailure
+
+
+class TerminalModule(TerminalBase):
+
+    terminal_prompts_re = [
+        re.compile(r"[\r\n]?[\w+\-\.:\/\[\]]+(?:\([^\)]+\)){,3}(?:>|#) ?$"),
+        re.compile(r"\@[\w\-\.]+:\S+?[>#\$] ?$")
+    ]
+
+    terminal_errors_re = [
+        re.compile(r"\n\s*Invalid command:"),
+        re.compile(r"\nCommit failed"),
+        re.compile(r"\n\s+Set failed"),
+    ]
+
+    def on_open_shell(self):
+        try:
+            self._exec_cli_command('set terminal length 0')
+        except AnsibleConnectionFailure:
+            raise AnsibleConnectionFailure('unable to set terminal parameters')
+
 
