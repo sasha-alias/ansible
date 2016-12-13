@@ -515,7 +515,13 @@ def command_units(args):
 
     for version, command, env in version_commands:
         display.info('Unit test with Python %s' % version)
-        intercept_command(args, command, env=env, python_version=version)
+
+        try:
+            intercept_command(args, command, env=env, python_version=version)
+        except SubprocessError as ex:
+            # pytest exits with status code 5 when all tests are skipped, which isn't an error for our use case
+            if ex.status != 5:
+                raise
 
 
 def command_compile(args):
@@ -562,7 +568,7 @@ def command_compile(args):
         if skip_paths:
             cmd += ['-x', '|'.join(skip_paths)]
 
-        cmd += [target.path for target in include]
+        cmd += [target.path if target.path == '.' else './%s' % target.path for target in include]
 
         version_commands.append((version, cmd))
 
