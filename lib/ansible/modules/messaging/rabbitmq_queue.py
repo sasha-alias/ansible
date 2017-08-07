@@ -2,26 +2,16 @@
 # -*- coding: utf-8 -*-
 
 # (c) 2015, Manuel Sousa <manuel.sousa@gmail.com>
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-#
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = '''
 ---
@@ -129,9 +119,16 @@ EXAMPLES = '''
     login_host: remote.example.org
 '''
 
-import requests
-import urllib
 import json
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError as e:
+    HAS_REQUESTS = False
+import urllib
+
+from ansible.module_utils.basic import AnsibleModule
+
 
 def main():
     module = AnsibleModule(
@@ -161,6 +158,9 @@ def main():
         urllib.quote(module.params['vhost'],''),
         module.params['name']
     )
+
+    if not HAS_REQUESTS:
+        module.fail_json(msg="requests library is required for this module. To install, use `pip install requests`")
 
     # Check if queue already exists
     r = requests.get( url, auth=(module.params['login_user'],module.params['login_password']))
@@ -200,12 +200,14 @@ def main():
                 ( 'x-max-length' not in response['arguments'] and module.params['max_length'] is None )
             ) and
             (
-                ( 'x-dead-letter-exchange' in response['arguments'] and response['arguments']['x-dead-letter-exchange'] == module.params['dead_letter_exchange'] ) or
-                ( 'x-dead-letter-exchange' not in response['arguments'] and module.params['dead_letter_exchange'] is None )
+                ('x-dead-letter-exchange' in response['arguments'] and
+                 response['arguments']['x-dead-letter-exchange'] == module.params['dead_letter_exchange']) or
+                ('x-dead-letter-exchange' not in response['arguments'] and module.params['dead_letter_exchange'] is None)
             ) and
             (
-                ( 'x-dead-letter-routing-key' in response['arguments'] and response['arguments']['x-dead-letter-routing-key'] == module.params['dead_letter_routing_key'] ) or
-                ( 'x-dead-letter-routing-key' not in response['arguments'] and module.params['dead_letter_routing_key'] is None )
+                ('x-dead-letter-routing-key' in response['arguments'] and
+                 response['arguments']['x-dead-letter-routing-key'] == module.params['dead_letter_routing_key']) or
+                ('x-dead-letter-routing-key' not in response['arguments'] and module.params['dead_letter_routing_key'] is None)
             )
         ):
             module.fail_json(
@@ -221,7 +223,7 @@ def main():
         'dead_letter_exchange': 'x-dead-letter-exchange',
         'dead_letter_routing_key': 'x-dead-letter-routing-key'
     }.items():
-        if module.params[k]:
+        if module.params[k] is not None:
             module.params['arguments'][v] = module.params[k]
 
     # Exit if check_mode
@@ -237,19 +239,20 @@ def main():
     if change_required:
         if module.params['state'] == 'present':
             r = requests.put(
-                    url,
-                    auth = (module.params['login_user'],module.params['login_password']),
-                    headers = { "content-type": "application/json"},
-                    data = json.dumps({
-                        "durable": module.params['durable'],
-                        "auto_delete": module.params['auto_delete'],
-                        "arguments": module.params['arguments']
+                url,
+                auth = (module.params['login_user'],module.params['login_password']),
+                headers = { "content-type": "application/json"},
+                data = json.dumps({
+                    "durable": module.params['durable'],
+                    "auto_delete": module.params['auto_delete'],
+                    "arguments": module.params['arguments']
                     })
-                )
+            )
         elif module.params['state'] == 'absent':
             r = requests.delete( url, auth = (module.params['login_user'],module.params['login_password']))
 
-        if r.status_code == 204:
+        # RabbitMQ 3.6.7 changed this response code from 204 to 201
+        if r.status_code == 204 or r.status_code == 201:
             module.exit_json(
                 changed = True,
                 name = module.params['name']
@@ -267,8 +270,6 @@ def main():
             name = module.params['name']
         )
 
-# import module snippets
-from ansible.module_utils.basic import *
 
 if __name__ == '__main__':
     main()

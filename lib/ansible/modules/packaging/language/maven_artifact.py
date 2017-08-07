@@ -6,38 +6,16 @@
 # Built using https://github.com/hamnis/useful-scripts/blob/master/python/download-maven-artifact
 # as a reference and starting point.
 #
-# This module is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This software is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this software.  If not, see <http://www.gnu.org/licenses/>.
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-__author__ = 'cschmidt'
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
 
-from lxml import etree
-import os
-import hashlib
-import sys
-import posixpath
-import urlparse
-from ansible.module_utils.basic import *
-from ansible.module_utils.urls import *
-try:
-    import boto3
-    HAS_BOTO = True
-except ImportError:
-    HAS_BOTO = False
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = '''
 ---
@@ -119,6 +97,14 @@ options:
         default: 'yes'
         choices: ['yes', 'no']
         version_added: "1.9.3"
+    keep_name:
+        description:
+            - If C(yes), the downloaded artifact's name is preserved, i.e the version number remains part of it.
+            - This option only has effect when C(dest) is a directory and C(version) is set to C(latest).
+        required: false
+        default: no
+        choices: ['yes', 'no']
+        version_added: "2.4"
 '''
 
 EXAMPLES = '''
@@ -151,7 +137,33 @@ EXAMPLES = '''
     extension: war
     repository_url: 'https://repo.company.com/maven'
     dest: /var/lib/tomcat7/webapps/web-app.war
+
+# Keep a downloaded artifact's name, i.e. retain the version
+- maven_artifact:
+    version: latest
+    artifact_id: spring-core
+    group_id: org.springframework
+    dest: /tmp/
+    keep_name: yes
 '''
+
+import hashlib
+import os
+import posixpath
+import sys
+
+from lxml import etree
+
+try:
+    import boto3
+    HAS_BOTO = True
+except ImportError:
+    HAS_BOTO = False
+
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.six.moves.urllib.parse import urlparse
+from ansible.module_utils.urls import fetch_url
+
 
 class Artifact(object):
     def __init__(self, group_id, artifact_id, version, classifier=None, extension='jar'):
@@ -227,17 +239,21 @@ class MavenDownloader:
             base = base.rstrip("/")
         self.base = base
         self.user_agent = "Maven Artifact Downloader/1.0"
+        self.latest_version_found = None
 
-    def _find_latest_version_available(self, artifact):
+    def find_latest_version_available(self, artifact):
+        if self.latest_version_found:
+            return self.latest_version_found
         path = "/%s/maven-metadata.xml" % (artifact.path(False))
         xml = self._request(self.base + path, "Failed to download maven-metadata.xml", lambda r: etree.parse(r))
         v = xml.xpath("/metadata/versioning/versions/version[last()]/text()")
         if v:
+            self.latest_version_found = v[0]
             return v[0]
 
     def find_uri_for_artifact(self, artifact):
         if artifact.version == "latest":
-            artifact.version = self._find_latest_version_available(artifact)
+            artifact.version = self.find_latest_version_available(artifact)
 
         if artifact.is_snapshot():
             path = "/%s/maven-metadata.xml" % (artifact.path())
@@ -245,7 +261,10 @@ class MavenDownloader:
             timestamp = xml.xpath("/metadata/versioning/snapshot/timestamp/text()")[0]
             buildNumber = xml.xpath("/metadata/versioning/snapshot/buildNumber/text()")[0]
             for snapshotArtifact in xml.xpath("/metadata/versioning/snapshotVersions/snapshotVersion"):
-                if len(snapshotArtifact.xpath("classifier/text()")) > 0 and snapshotArtifact.xpath("classifier/text()")[0] == artifact.classifier and len(snapshotArtifact.xpath("extension/text()")) > 0 and snapshotArtifact.xpath("extension/text()")[0] == artifact.extension:
+                if (len(snapshotArtifact.xpath("classifier/text()")) > 0 and
+                        snapshotArtifact.xpath("classifier/text()")[0] == artifact.classifier and
+                        len(snapshotArtifact.xpath("extension/text()")) > 0 and
+                        snapshotArtifact.xpath("extension/text()")[0] == artifact.extension):
                     return self._uri_for_artifact(artifact, snapshotArtifact.xpath("value/text()")[0])
             return self._uri_for_artifact(artifact, artifact.version.replace("SNAPSHOT", timestamp + "-" + buildNumber))
 
@@ -265,11 +284,11 @@ class MavenDownloader:
         url_to_use = url
         parsed_url = urlparse(url)
         if parsed_url.scheme=='s3':
-                parsed_url = urlparse(url)
-                bucket_name = parsed_url.netloc
-                key_name = parsed_url.path[1:]
-                client = boto3.client('s3',aws_access_key_id=self.module.params.get('username', ''), aws_secret_access_key=self.module.params.get('password', ''))
-                url_to_use = client.generate_presigned_url('get_object',Params={'Bucket':bucket_name,'Key':key_name},ExpiresIn=10)
+            parsed_url = urlparse(url)
+            bucket_name = parsed_url.netloc
+            key_name = parsed_url.path[1:]
+            client = boto3.client('s3',aws_access_key_id=self.module.params.get('username', ''), aws_secret_access_key=self.module.params.get('password', ''))
+            url_to_use = client.generate_presigned_url('get_object',Params={'Bucket':bucket_name,'Key':key_name},ExpiresIn=10)
 
         req_timeout = self.module.params.get('timeout')
 
@@ -288,7 +307,7 @@ class MavenDownloader:
     def download(self, artifact, filename=None):
         filename = artifact.get_filename(filename)
         if not artifact.version or artifact.version == "latest":
-            artifact = Artifact(artifact.group_id, artifact.artifact_id, self._find_latest_version_available(artifact),
+            artifact = Artifact(artifact.group_id, artifact.artifact_id, self.find_latest_version_available(artifact),
                                 artifact.classifier, artifact.extension)
 
         url = self.find_uri_for_artifact(artifact)
@@ -350,6 +369,7 @@ class MavenDownloader:
 
 
 def main():
+
     module = AnsibleModule(
         argument_spec = dict(
             group_id = dict(default=None),
@@ -364,11 +384,16 @@ def main():
             timeout = dict(default=10, type='int'),
             dest = dict(type="path", default=None),
             validate_certs = dict(required=False, default=True, type='bool'),
+            keep_name = dict(required=False, default=False, type='bool'),
         )
     )
 
+    repository_url = module.params["repository_url"]
+    if not repository_url:
+        repository_url = "http://repo1.maven.org/maven2"
+
     try:
-        parsed_url = urlparse(module.params["repository_url"])
+        parsed_url = urlparse(repository_url)
     except AttributeError as e:
         module.fail_json(msg='url parsing went wrong %s' % e)
 
@@ -380,14 +405,9 @@ def main():
     version = module.params["version"]
     classifier = module.params["classifier"]
     extension = module.params["extension"]
-    repository_url = module.params["repository_url"]
-    repository_username = module.params["username"]
-    repository_password = module.params["password"]
     state = module.params["state"]
     dest = module.params["dest"]
-
-    if not repository_url:
-        repository_url = "http://repo1.maven.org/maven2"
+    keep_name = module.params["keep_name"]
 
     #downloader = MavenDownloader(module, repository_url, repository_username, repository_password)
     downloader = MavenDownloader(module, repository_url)
@@ -399,7 +419,10 @@ def main():
 
     prev_state = "absent"
     if os.path.isdir(dest):
-        dest = posixpath.join(dest, artifact_id + "-" + version + "." + extension)
+        version_part = version
+        if keep_name and version == 'latest':
+            version_part = downloader.find_latest_version_available(artifact)
+        dest = posixpath.join(dest, "%s-%s.%s" % (artifact_id, version_part, extension))
     if os.path.lexists(dest) and downloader.verify_md5(dest, downloader.find_uri_for_artifact(artifact) + '.md5'):
         prev_state = "present"
     else:
@@ -412,12 +435,12 @@ def main():
 
     try:
         if downloader.download(artifact, dest):
-            module.exit_json(state=state, dest=dest, group_id=group_id, artifact_id=artifact_id, version=version, classifier=classifier, extension=extension, repository_url=repository_url, changed=True)
+            module.exit_json(state=state, dest=dest, group_id=group_id, artifact_id=artifact_id, version=version, classifier=classifier,
+                             extension=extension, repository_url=repository_url, changed=True)
         else:
             module.fail_json(msg="Unable to download the artifact")
     except ValueError as e:
         module.fail_json(msg=e.args[0])
-
 
 
 if __name__ == '__main__':

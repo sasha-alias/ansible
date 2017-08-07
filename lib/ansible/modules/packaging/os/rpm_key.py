@@ -4,24 +4,16 @@
 # Ansible module to import third party repo keys to your rpm db
 # (c) 2013, Héctor Acosta <hector.acosta@gazzang.com>
 #
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'core',
-                    'version': '1.0'}
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'core'}
+
 
 DOCUMENTATION = '''
 ---
@@ -74,12 +66,19 @@ import re
 import os.path
 import tempfile
 
+# import module snippets
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.urls import fetch_url
+from ansible.module_utils._text import to_native
+
+
 def is_pubkey(string):
     """Verifies if string is a pubkey"""
     pgp_regex = ".*?(-----BEGIN PGP PUBLIC KEY BLOCK-----.*?-----END PGP PUBLIC KEY BLOCK-----).*"
-    return re.match(pgp_regex, string, re.DOTALL)
+    return bool(re.match(pgp_regex, to_native(string, errors='surrogate_or_strict'), re.DOTALL))
 
-class RpmKey:
+
+class RpmKey(object):
 
     def __init__(self, module):
         # If the key is a url, we need to check if it's present to be idempotent,
@@ -121,7 +120,6 @@ class RpmKey:
             else:
                 module.exit_json(changed=False)
 
-
     def fetch_key(self, url):
         """Downloads a key from url, returns a valid path to a gpg key"""
         rsp, info = fetch_url(self.module, url)
@@ -154,7 +152,7 @@ class RpmKey:
             gpg = self.module.get_bin_path('gpg2')
 
         if not gpg:
-            self.json_fail(msg="rpm_key requires a command line gpg or gpg2, none found")
+            self.module.fail_json(msg="rpm_key requires a command line gpg or gpg2, none found")
 
         stdout, stderr = self.execute_command([gpg, '--no-tty', '--batch', '--with-colons', '--fixed-list-mode', '--list-packets', keyfile])
         for line in stdout.splitlines():
@@ -163,7 +161,7 @@ class RpmKey:
                 # We want just the last 8 characters of the keyid
                 keyid = line.split()[-1].strip()[8:]
                 return keyid
-        self.json_fail(msg="Unexpected gpg output")
+        self.module.fail_json(msg="Unexpected gpg output")
 
     def is_keyid(self, keystr):
         """Verifies if a key, as provided by the user is a keyid"""
@@ -200,20 +198,16 @@ class RpmKey:
 
 def main():
     module = AnsibleModule(
-            argument_spec = dict(
-                state=dict(default='present', choices=['present', 'absent'], type='str'),
-                key=dict(required=True, type='str'),
-                validate_certs=dict(default='yes', type='bool'),
-                ),
-            supports_check_mode=True
-            )
+        argument_spec = dict(
+            state=dict(default='present', choices=['present', 'absent'], type='str'),
+            key=dict(required=True, type='str'),
+            validate_certs=dict(default='yes', type='bool'),
+            ),
+        supports_check_mode=True
+        )
 
     RpmKey(module)
 
 
-
-# import module snippets
-from ansible.module_utils.basic import *
-from ansible.module_utils.urls import *
 if __name__ == '__main__':
     main()

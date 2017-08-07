@@ -3,22 +3,16 @@
 
 # Copyright 2014 Peter Oliver <ansible@mavit.org.uk>
 #
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = '''
 ---
@@ -111,7 +105,7 @@ def modify_publisher(module, params):
 
     if name in existing:
         for option in ['origin', 'mirror', 'sticky', 'enabled']:
-            if params[option] != None:
+            if params[option] is not None:
                 if params[option] != existing[name][option]:
                     return set_publisher(module, params)
     else:
@@ -124,21 +118,21 @@ def set_publisher(module, params):
     name = params['name']
     args = []
 
-    if params['origin'] != None:
+    if params['origin'] is not None:
         args.append('--remove-origin=*')
         args.extend(['--add-origin=' + u for u in params['origin']])
-    if params['mirror'] != None:
+    if params['mirror'] is not None:
         args.append('--remove-mirror=*')
         args.extend(['--add-mirror=' + u for u in params['mirror']])
 
-    if params['sticky'] != None and params['sticky']:
+    if params['sticky'] is not None and params['sticky']:
         args.append('--sticky')
-    elif params['sticky'] != None:
+    elif params['sticky'] is not None:
         args.append('--non-sticky')
 
-    if params['enabled'] != None and params['enabled']:
+    if params['enabled'] is not None and params['enabled']:
         args.append('--enable')
-    elif params['enabled'] != None:
+    elif params['enabled'] is not None:
         args.append('--disable')
 
     rc, out, err = module.run_command(

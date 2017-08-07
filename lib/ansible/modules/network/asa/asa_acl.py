@@ -1,24 +1,16 @@
 #!/usr/bin/python
 #
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-#
+# Copyright: Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = """
 ---
@@ -94,7 +86,7 @@ options:
         desirable to have the task get the current running-config for
         every task in a playbook.  The I(config) argument allows the
         implementer to pass in the configuruation to use as the base
-        config for comparision.
+        config for comparison.
     required: false
     default: null
 """
@@ -102,6 +94,7 @@ options:
 EXAMPLES = """
 # Note: examples below use the following provider dict to handle
 #       transport and authentication to the node.
+---
 vars:
   cli:
     host: "{{ inventory_hostname }}"
@@ -111,6 +104,7 @@ vars:
     authorize: yes
     auth_pass: cisco
 
+---
 - asa_acl:
     lines:
       - access-list ACL-ANSIBLE extended permit tcp any any eq 82
@@ -127,7 +121,7 @@ vars:
     lines:
       - access-list ACL-OUTSIDE extended permit tcp any any eq www
       - access-list ACL-OUTSIDE extended permit tcp any any eq https
-     context: customer_a
+    context: customer_a
     provider: "{{ cli }}"
 """
 
@@ -140,11 +134,10 @@ updates:
 
 responses:
   description: The set of responses from issuing the commands on the device
-  retured: when not check_mode
+  returned: when not check_mode
   type: list
   sample: ['...', '...']
 """
-import ansible.module_utils.asa
 
 from ansible.module_utils.network import NetworkModule
 from ansible.module_utils.netcfg import NetworkConfig, dumps
@@ -195,12 +188,6 @@ def main():
                            supports_check_mode=True)
 
     lines = module.params['lines']
-
-    before = module.params['before']
-    after = module.params['after']
-
-    match = module.params['match']
-    replace = module.params['replace']
 
     result = dict(changed=False)
 

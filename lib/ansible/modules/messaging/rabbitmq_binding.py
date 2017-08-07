@@ -2,26 +2,16 @@
 # -*- coding: utf-8 -*-
 
 # (c) 2015, Manuel Sousa <manuel.sousa@gmail.com>
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-#
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = '''
 ---
@@ -109,12 +99,20 @@ EXAMPLES = '''
     name: topicExchange
     destination: topicExchange
     type: exchange
-    routing_key: *.info
+    routing_key: '*.info'
 '''
 
-import requests
-import urllib
 import json
+import urllib
+
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError as e:
+    HAS_REQUESTS = False
+
+from ansible.module_utils.basic import AnsibleModule
+
 
 def main():
     module = AnsibleModule(
@@ -133,6 +131,9 @@ def main():
         ),
         supports_check_mode = True
     )
+
+    if not HAS_REQUESTS:
+        module.fail_json(msg="requests library is required for this module. To install, use `pip install requests`")
 
     if module.params['destination_type'] == "queue":
         dest_type="q"
@@ -196,14 +197,14 @@ def main():
             )
 
             r = requests.post(
-                    url,
-                    auth = (module.params['login_user'],module.params['login_password']),
-                    headers = { "content-type": "application/json"},
-                    data = json.dumps({
-                        "routing_key": module.params['routing_key'],
-                        "arguments": module.params['arguments']
+                url,
+                auth = (module.params['login_user'],module.params['login_password']),
+                headers = { "content-type": "application/json"},
+                data = json.dumps({
+                    "routing_key": module.params['routing_key'],
+                    "arguments": module.params['arguments']
                     })
-                )
+            )
         elif module.params['state'] == 'absent':
             r = requests.delete( url, auth = (module.params['login_user'],module.params['login_password']))
 
@@ -226,8 +227,6 @@ def main():
             name = module.params['name']
         )
 
-# import module snippets
-from ansible.module_utils.basic import *
 
 if __name__ == '__main__':
     main()

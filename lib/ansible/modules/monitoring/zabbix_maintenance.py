@@ -19,9 +19,10 @@
 # along with Ansible. If not, see <http://www.gnu.org/licenses/>.
 
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+ANSIBLE_METADATA = {'metadata_version': '1.0',
+                    'status': ['preview'],
+                    'supported_by': 'community'}
+
 
 DOCUMENTATION = '''
 
@@ -120,7 +121,7 @@ notes:
       so if Zabbix server's time and host's time are not synchronized,
       you will get strange results.
     - Install required module with 'pip install zabbix-api' command.
-    - Checks existance only by maintenance name.
+    - Checks existence only by maintenance name.
 '''
 
 EXAMPLES = '''
@@ -298,7 +299,7 @@ def main():
     )
 
     if not HAS_ZABBIX_API:
-        module.fail_json(msg="Missing requried zabbix-api module (check docs or install with: pip install zabbix-api)")
+        module.fail_json(msg="Missing required zabbix-api module (check docs or install with: pip install zabbix-api)")
 
     host_names = module.params['host_names']
     host_groups = module.params['host_groups']
@@ -349,7 +350,7 @@ def main():
 
         (rc, maintenance, error) = get_maintenance_id(zbx, name)
         if rc != 0:
-            module.fail_json(msg="Failed to check maintenance %s existance: %s" % (name, error))
+            module.fail_json(msg="Failed to check maintenance %s existence: %s" % (name, error))
 
         if not maintenance:
             if not host_names and not host_groups:
@@ -368,7 +369,7 @@ def main():
 
         (rc, maintenance, error) = get_maintenance_id(zbx, name)
         if rc != 0:
-            module.fail_json(msg="Failed to check maintenance %s existance: %s" % (name, error))
+            module.fail_json(msg="Failed to check maintenance %s existence: %s" % (name, error))
 
         if maintenance:
             if module.check_mode:
