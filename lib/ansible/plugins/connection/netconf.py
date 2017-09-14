@@ -1,22 +1,73 @@
-#
 # (c) 2016 Red Hat Inc.
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# (c) 2017 Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
+
+DOCUMENTATION = """
+    author: Ansible Networking Team
+    connection: netconf
+    short_description: Use netconf to run command on network appliances
+    description:
+        - Use netconf to run command on network appliances
+    version_added: "2.3"
+    options:
+      network_os:
+        description:
+            - Appliance specific OS
+        default: 'default'
+        vars:
+            - name: ansible_netconf_network_os
+      password:
+        description:
+            - Secret used to authenticate
+        vars:
+            - name: ansible_pass
+            - name: ansible_netconf_pass
+      private_key_file:
+        description:
+            - Key or certificate file used for authentication
+        vars:
+            - name: ansible_private_key_file
+            - name: ansible_netconf_private_key_file
+      ssh_config:
+        type: boolean
+        default: False
+        description:
+            - Flag to decide if we use SSH configuration options with netconf
+        vars:
+            - name: ansible_netconf_ssh_config
+        env:
+            - name: ANSIBLE_NETCONF_SSH_CONFIG
+      user:
+        description:
+          - User to authenticate as
+        vars:
+          - name: ansible_user
+          - name: ansible_netconf_user
+      port:
+        type: int
+        description:
+          - port to connect to on the remote
+        default: 830
+        vars:
+          - name: ansible_port
+          - name: ansible_netconf_port
+      timeout:
+        type: int
+        description:
+          - Connection timeout in seconds
+        default: 120
+      host_key_checking:
+        type: boolean
+        description:
+          - Flag to control wether we check for validity of the host key of the remote
+        default: True
+# TODO:
+#look_for_keys=C.PARAMIKO_LOOK_FOR_KEYS,
+#allow_agent=self.allow_agent,
+"""
 
 import os
 import logging
@@ -25,7 +76,8 @@ import json
 from ansible import constants as C
 from ansible.errors import AnsibleConnectionFailure, AnsibleError
 from ansible.module_utils._text import to_bytes, to_native, to_text
-from ansible.plugins import netconf_loader
+from ansible.module_utils.parsing.convert_bool import BOOLEANS_TRUE
+from ansible.plugins.loader import netconf_loader
 from ansible.plugins.connection import ConnectionBase, ensure_connect
 from ansible.utils.jsonrpc import Rpc
 
@@ -85,6 +137,12 @@ class Connection(Rpc, ConnectionBase):
         if not network_os:
             raise AnsibleConnectionFailure('Unable to automatically determine host network os. Please ansible_network_os value')
 
+        ssh_config = os.getenv('ANSIBLE_NETCONF_SSH_CONFIG', False)
+        if ssh_config in BOOLEANS_TRUE:
+            ssh_config = True
+        else:
+            ssh_config = None
+
         try:
             self._manager = manager.connect(
                 host=self._play_context.remote_addr,
@@ -96,7 +154,8 @@ class Connection(Rpc, ConnectionBase):
                 look_for_keys=C.PARAMIKO_LOOK_FOR_KEYS,
                 allow_agent=self.allow_agent,
                 timeout=self._play_context.timeout,
-                device_params={'name': network_os}
+                device_params={'name': network_os},
+                ssh_config=ssh_config
             )
         except SSHUnknownHostError as exc:
             raise AnsibleConnectionFailure(str(exc))

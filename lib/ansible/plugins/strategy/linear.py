@@ -14,8 +14,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-'''
-DOCUMENTATION:
+# Make coding more python3-ish
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
+DOCUMENTATION = '''
     strategy: linear
     short_description: Executes tasks in a linear fashion
     description:
@@ -24,12 +27,9 @@ DOCUMENTATION:
           the next series of hosts until the batch is done, before going on to the next task.
     version_added: "2.0"
     notes:
-     - This was the default Ansible behaviour before 'strategy plugins' were introduces in 2.0.
+     - This was the default Ansible behaviour before 'strategy plugins' were introduced in 2.0.
     author: Ansible Core Team
 '''
-# Make coding more python3-ish
-from __future__ import (absolute_import, division, print_function)
-__metaclass__ = type
 
 from ansible.errors import AnsibleError
 from ansible.executor.play_iterator import PlayIterator
@@ -38,7 +38,7 @@ from ansible.module_utils._text import to_text
 from ansible.playbook.block import Block
 from ansible.playbook.included_file import IncludedFile
 from ansible.playbook.task import Task
-from ansible.plugins import action_loader
+from ansible.plugins.loader import action_loader
 from ansible.plugins.strategy import StrategyBase
 from ansible.template import Templar
 

@@ -26,10 +26,9 @@ import sys
 import yaml
 
 from ansible.cli import CLI
-from ansible.config.data import Setting
-from ansible.config.manager import ConfigManager
+from ansible.config.manager import ConfigManager, Setting, find_ini_config_file
 from ansible.errors import AnsibleError, AnsibleOptionsError
-from ansible.module_utils._text import to_native, to_text
+from ansible.module_utils._text import to_native, to_text, to_bytes
 from ansible.parsing.yaml.dumper import AnsibleDumper
 from ansible.utils.color import stringc
 from ansible.utils.path import unfrackpath
@@ -45,7 +44,7 @@ except ImportError:
 class ConfigCLI(CLI):
     """ Config command line class """
 
-    VALID_ACTIONS = ("view", "edit", "update", "dump", "list")
+    VALID_ACTIONS = ("view", "dump", "list") # TODO: edit, update, search
 
     def __init__(self, args, callback=None):
 
@@ -57,9 +56,9 @@ class ConfigCLI(CLI):
 
         self.parser = CLI.base_parser(
             usage = "usage: %%prog [%s] [--help] [options] [ansible.cfg]" % "|".join(self.VALID_ACTIONS),
-            epilog = "\nSee '%s <command> --help' for more information on a specific command.\n\n" % os.path.basename(sys.argv[0])
+            epilog = "\nSee '%s <command> --help' for more information on a specific command.\n\n" % os.path.basename(sys.argv[0]),
+            desc="View, edit, and manage ansible configuration.",
         )
-
         self.parser.add_option('-c', '--config', dest='config_file', help="path to configuration file, defaults to first file found in precedence.")
 
         self.set_action()
@@ -68,14 +67,13 @@ class ConfigCLI(CLI):
         if self.action == "list":
             self.parser.set_usage("usage: %prog list [options] ")
         if self.action == "dump":
-            self.parser.set_usage("usage: %prog dump [options] [-c ansible.cfg]")
-        elif self.action == "view":
-            self.parser.set_usage("usage: %prog view [options] [-c ansible.cfg] ")
-        elif self.action == "edit":
-            self.parser.set_usage("usage: %prog edit [options] [-c ansible.cfg]")
+            self.parser.add_option('--only-changed', dest='only_changed', action='store_true',
+                                   help="Only show configurations that have changed from the default")
         elif self.action == "update":
             self.parser.add_option('-s', '--setting', dest='setting', help="config setting, the section defaults to 'defaults'")
             self.parser.set_usage("usage: %prog update [options] [-c ansible.cfg] -s '[section.]setting=value'")
+        elif self.action == "search":
+            self.parser.set_usage("usage: %prog update [options] [-c ansible.cfg] <search term>")
 
         self.options, self.args = self.parser.parse_args()
         display.verbosity = self.options.verbosity
@@ -85,23 +83,23 @@ class ConfigCLI(CLI):
         super(ConfigCLI, self).run()
 
         if self.options.config_file:
-            self.config_file = unfrackpath(self.options.config_file, follow=False)
+            self.config_file = to_bytes(unfrackpath(self.options.config_file, follow=False))
             self.config = ConfigManager(self.config_file)
         else:
             self.config = ConfigManager()
-            self.config_file = self.config.data.get_setting('ANSIBLE_CONFIG')
-            try:
-                if not os.path.exists(self.config_file):
-                    raise AnsibleOptionsError("%s does not exist or is not accessible" % (self.config_file))
-                elif not os.path.isfile(self.config_file):
-                    raise AnsibleOptionsError("%s is not a valid file" % (self.config_file))
+            self.config_file = to_bytes(find_ini_config_file())
+        try:
+            if not os.path.exists(self.config_file):
+                raise AnsibleOptionsError("%s does not exist or is not accessible" % (self.config_file))
+            elif not os.path.isfile(self.config_file):
+                raise AnsibleOptionsError("%s is not a valid file" % (self.config_file))
 
-                os.environ['ANSIBLE_CONFIG'] = self.config_file
-            except:
-                if self.action in ['view']:
-                    raise
-                elif self.action in ['edit', 'update']:
-                    display.warning("File does not exist, used empty file: %s" % self.config_file)
+            os.environ['ANSIBLE_CONFIG'] = to_native(self.config_file)
+        except:
+            if self.action in ['view']:
+                raise
+            elif self.action in ['edit', 'update']:
+                display.warning("File does not exist, used empty file: %s" % self.config_file)
 
         self.execute()
 
@@ -111,6 +109,7 @@ class ConfigCLI(CLI):
         '''
         raise AnsibleError("Option not implemented yet")
 
+        # pylint: disable=unreachable
         if self.options.setting is None:
             raise AnsibleOptionsError("update option requries a setting to update")
 
@@ -143,6 +142,8 @@ class ConfigCLI(CLI):
         Opens ansible.cfg in the default EDITOR
         '''
         raise AnsibleError("Option not implemented yet")
+
+        # pylint: disable=unreachable
         try:
             editor = shlex.split(os.environ.get('EDITOR','vi'))
             editor.append(self.config_file)
@@ -154,14 +155,15 @@ class ConfigCLI(CLI):
         '''
         list all current configs reading lib/constants.py and shows env and config file setting names
         '''
-        self.pager(to_text(yaml.dump(self.config.initial_defs, Dumper=AnsibleDumper), errors='surrogate_or_strict'))
+        self.pager(to_text(yaml.dump(self.config.get_configuration_definitions(), Dumper=AnsibleDumper), errors='surrogate_or_strict'))
 
     def execute_dump(self):
         '''
         Shows the current settings, merges ansible.cfg if specified
         '''
+        # FIXME: deal with plugins, not just base config
         text = []
-        defaults = self.config.initial_defs.copy()
+        defaults = self.config.get_configuration_definitions().copy()
         for setting in self.config.data.get_settings():
             if setting.name in defaults:
                 defaults[setting.name] = setting
@@ -176,6 +178,7 @@ class ConfigCLI(CLI):
             else:
                 color = 'green'
                 msg = "%s(%s) = %s" % (setting, 'default', defaults[setting].get('default'))
-            text.append(stringc(msg, color))
+            if not self.options.only_changed or color == 'yellow':
+                text.append(stringc(msg, color))
 
         self.pager(to_text('\n'.join(text), errors='surrogate_or_strict'))

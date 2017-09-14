@@ -40,6 +40,7 @@ from ansible.parsing.utils.jsonify import jsonify
 from ansible.playbook.play_context import MAGIC_VARIABLE_MAPPING
 from ansible.release import __version__
 from ansible.utils.unsafe_proxy import wrap_var
+from ansible.vars.manager import remove_internal_keys
 
 
 try:
@@ -165,7 +166,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
 
         return (module_style, module_shebang, module_data, module_path)
 
-    def _compute_environment_string(self, raw_environment_out=dict()):
+    def _compute_environment_string(self, raw_environment_out=None):
         '''
         Builds the environment string to be used when executing the remote task.
         '''
@@ -391,7 +392,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             # we have a need for it, at which point we'll have to do something different.
             return remote_paths
 
-        if self._play_context.become and self._play_context.become_user not in ('root', remote_user):
+        if self._play_context.become and self._play_context.become_user and self._play_context.become_user not in ('root', remote_user):
             # Unprivileged user that's different than the ssh user.  Let's get
             # to work!
 
@@ -531,7 +532,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
             elif 'json' in errormsg or 'simplejson' in errormsg:
                 x = "5"  # json or simplejson modules needed
         finally:
-            return x
+            return x  # pylint: disable=lost-exception
 
     def _remote_expand_user(self, path, sudoable=True):
         ''' takes a remote path and performs tilde expansion on the remote host '''
@@ -743,7 +744,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         tmpdir_delete = (not data.pop("_ansible_suppress_tmpdir_delete", False) and wrap_async)
 
         # remove internal keys
-        self._remove_internal_keys(data)
+        remove_internal_keys(data)
 
         # cleanup tmp?
         if (self._play_context.become and self._play_context.become_user != 'root') and not persist_files and delete_remote_tmp or tmpdir_delete:
@@ -766,17 +767,6 @@ class ActionBase(with_metaclass(ABCMeta, object)):
         display.debug("done with _execute_module (%s, %s)" % (module_name, module_args))
         return data
 
-    def _remove_internal_keys(self, data):
-        for key in list(data.keys()):
-            if key.startswith('_ansible_') and key != '_ansible_parsed' or key in C.INTERNAL_RESULT_KEYS:
-                display.warning("Removed unexpected internal key in module return: %s = %s" % (key, data[key]))
-                del data[key]
-
-        # remove bad/empty internal keys
-        for key in ['warnings', 'deprecations']:
-            if key in data and not data[key]:
-                del data[key]
-
     def _clean_returned_data(self, data):
         remove_keys = set()
         fact_keys = set(data.keys())
@@ -790,7 +780,8 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 conn_name = os.path.splitext(os.path.basename(conn_path))[0]
                 re_key = re.compile('^ansible_%s_' % conn_name)
                 for fact_key in fact_keys:
-                    if re_key.match(fact_key):
+                    # exception for lvm tech, whic normally returns asnible_x_bridge facts that get filterd out (docker,lxc, etc)
+                    if re_key.match(fact_key) and not fact_key.endswith(('_bridge', '_gwbridge')):
                         remove_keys.add(fact_key)
             except AttributeError:
                 pass
@@ -817,7 +808,7 @@ class ActionBase(with_metaclass(ABCMeta, object)):
                 display.warning("Removed restricted key from module data: %s = %s" % (r_key, r_val))
                 del data[r_key]
 
-        self._remove_internal_keys(data)
+        remove_internal_keys(data)
 
     def _parse_returned_data(self, res):
         try:

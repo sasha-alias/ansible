@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'core'}
+                    'supported_by': 'network'}
 
 DOCUMENTATION = """
 ---
@@ -39,10 +39,6 @@ options:
         configured correctly.
   aggregate:
     description: List of VLANs definitions.
-  purge:
-    description:
-      - Purge VLANs not defined in the aggregate parameter.
-    default: no
   state:
     description:
       - State of the VLAN configuration.
@@ -57,7 +53,8 @@ requirements:
   - ncclient (>=v0.5.2)
 notes:
   - This module requires the netconf system service be enabled on
-    the remote device being managed
+    the remote device being managed.
+  - Tested against vSRX JUNOS version 15.1X49-D15.4, vqfx-10000 JUNOS Version 15.1X53-D60.4.
 """
 
 EXAMPLES = """
@@ -87,14 +84,15 @@ EXAMPLES = """
 - name: Create vlan configuration using aggregate
   junos_vlan:
     aggregate:
-      - { vlan_id: 159, name: test_vlan_1, description: test vlan-1, state: present }
-      - { vlan_id: 160, name: test_vlan_2, description: test vlan-2, state: present }
+      - { vlan_id: 159, name: test_vlan_1, description: test vlan-1 }
+      - { vlan_id: 160, name: test_vlan_2, description: test vlan-2 }
 
 - name: Delete vlan configuration using aggregate
   junos_vlan:
     aggregate:
-      - { vlan_id: 159, name: test_vlan_1, state: absent }
-      - { vlan_id: 160, name: test_vlan_2, state: absent }
+      - { vlan_id: 159, name: test_vlan_1 }
+      - { vlan_id: 160, name: test_vlan_2 }
+    state: absent
 """
 
 RETURN = """
@@ -110,9 +108,10 @@ diff.prepared:
 """
 import collections
 
-from copy import copy
+from copy import deepcopy
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.network_common import remove_default_spec
 from ansible.module_utils.junos import junos_argument_spec, check_args
 from ansible.module_utils.junos import load_config, map_params_to_obj, map_obj_to_ele, to_param_list
 from ansible.module_utils.junos import commit_configuration, discard_changes, locked_config
@@ -126,7 +125,7 @@ USE_PERSISTENT_CONNECTION = True
 
 
 def validate_vlan_id(value, module):
-    if not 1 <= value <= 4094:
+    if value and not 1 <= value <= 4094:
         module.fail_json(msg='vlan_id must be between 1 and 4094')
 
 
@@ -151,30 +150,25 @@ def main():
         state=dict(default='present', choices=['present', 'absent']),
         active=dict(default=True, type='bool')
     )
-    aggregate_spec = copy(element_spec)
+
+    aggregate_spec = deepcopy(element_spec)
     aggregate_spec['name'] = dict(required=True)
-    aggregate_spec['vlan_id'] = dict(required=True, type='int')
+
+    # remove default in aggregate spec, to handle common arguments
+    remove_default_spec(aggregate_spec)
 
     argument_spec = dict(
-        aggregate=dict(type='list', elements='dict', options=aggregate_spec),
-        purge=dict(default=False, type='bool')
+        aggregate=dict(type='list', elements='dict', options=aggregate_spec)
     )
 
     argument_spec.update(element_spec)
     argument_spec.update(junos_argument_spec)
 
     required_one_of = [['aggregate', 'name']]
-    required_together = [['name', 'vlan_id']]
-    mutually_exclusive = [['aggregate', 'name'],
-                          ['aggregate', 'vlan_id'],
-                          ['aggregate', 'description'],
-                          ['aggregate', 'interfaces'],
-                          ['aggregate', 'state'],
-                          ['aggregate', 'active']]
+    mutually_exclusive = [['aggregate', 'name']]
 
     module = AnsibleModule(argument_spec=argument_spec,
                            required_one_of=required_one_of,
-                           required_together=required_together,
                            mutually_exclusive=mutually_exclusive,
                            supports_check_mode=True)
 
@@ -199,7 +193,13 @@ def main():
     requests = list()
 
     for param in params:
-        item = copy(param)
+        # if key doesn't exist in the item, get it from module.params
+        for key in param:
+            if param.get(key) is None:
+                param[key] = module.params[key]
+
+        item = param.copy()
+
         validate_param_values(module, param_to_xpath_map, param=item)
 
         want = map_params_to_obj(module, param_to_xpath_map, param=item)
@@ -207,7 +207,7 @@ def main():
 
     with locked_config(module):
         for req in requests:
-            diff = load_config(module, tostring(req), warnings, action='replace')
+            diff = load_config(module, tostring(req), warnings, action='merge')
 
         commit = not module.check_mode
         if diff:

@@ -16,11 +16,9 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {
-    'metadata_version': '1.0',
-    'status': ['preview'],
-    'supported_by': 'community',
-}
+ANSIBLE_METADATA = {'metadata_version': '1.1',
+                    'status': ['preview'],
+                    'supported_by': 'network'}
 
 
 DOCUMENTATION = '''
@@ -34,6 +32,7 @@ description:
     overlay interface.
 author: Gabriele Gerbino (@GGabriele)
 notes:
+  - Tested against NXOSv 7.3.(0)D1(1) on VIRL
   - default, where supported, restores params default value.
 options:
   interface:
@@ -108,7 +107,7 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.netcfg import CustomNetworkConfig
 
 BOOL_PARAMS = [
-    'assoc-vrf',
+    'assoc_vrf',
     'suppress_arp',
 ]
 PARAM_TO_COMMAND_KEYMAP = {
@@ -165,8 +164,7 @@ def get_existing(module, args):
         temp_config = netcfg.get_section(parents)
 
         if 'member vni {0} associate-vrf'.format(module.params['vni']) in temp_config:
-            parents.append('member vni {0} associate-vrf'.format(
-                module.params['vni']))
+            parents.append('member vni {0} associate-vrf'.format(module.params['vni']))
             config = netcfg.get_section(parents)
         elif "member vni {0}".format(module.params['vni']) in temp_config:
             parents.append('member vni {0}'.format(module.params['vni']))
@@ -330,7 +328,7 @@ def main():
     candidate = CustomNetworkConfig(indent=3)
     if state == 'present':
         state_present(module, existing, proposed, candidate)
-    elif state == 'absent':
+    elif existing and state == 'absent':
         state_absent(module, existing, proposed, candidate)
 
     if candidate:

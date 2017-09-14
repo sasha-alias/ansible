@@ -16,11 +16,9 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {
-    'metadata_version': '1.0',
-    'status': ['preview'],
-    'supported_by': 'community'
-}
+ANSIBLE_METADATA = {'metadata_version': '1.1',
+                    'status': ['preview'],
+                    'supported_by': 'network'}
 
 
 DOCUMENTATION = '''
@@ -33,6 +31,7 @@ description:
     - Manages physical attributes of interfaces of NX-OS switches.
 author: Jason Edelman (@jedelman8)
 notes:
+  - Tested against NXOSv 7.3.(0)D1(1) on VIRL
   - This module is also used to create logical interfaces such as
     svis and loopbacks.
   - Be cautious of platform specific idiosyncrasies. For example,
@@ -142,7 +141,7 @@ commands:
     sample: ["interface port-channel101", "shutdown"]
 '''
 
-from ansible.module_utils.nxos import get_config, load_config, run_commands
+from ansible.module_utils.nxos import load_config, run_commands
 from ansible.module_utils.nxos import nxos_argument_spec, check_args
 from ansible.module_utils.basic import AnsibleModule
 
@@ -281,6 +280,8 @@ def get_interface(intf, module):
 
     if body:
         interface_table = body['TABLE_interface']['ROW_interface']
+        if interface_table.get('eth_mode') == 'fex-fabric':
+            module.fail_json(msg='nxos_interface does not support interfaces with mode "fex-fabric"')
         intf_type = get_interface_type(intf)
         if intf_type in ['portchannel', 'ethernet']:
             if not interface_table.get('eth_mode'):
@@ -699,8 +700,6 @@ def main():
                     cmds.extend(cmds2)
                 end_state, is_default = smart_existing(module, intf_type,
                                                        normalized_interface)
-            else:
-                end_state = get_interfaces_dict(module)[interface_type]
             cmds = [cmd for cmd in cmds if cmd != 'configure']
 
     results['commands'] = cmds

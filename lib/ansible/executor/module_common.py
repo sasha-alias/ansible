@@ -36,7 +36,7 @@ from ansible.release import __version__, __author__
 from ansible import constants as C
 from ansible.errors import AnsibleError
 from ansible.module_utils._text import to_bytes, to_text
-from ansible.plugins import module_utils_loader, ps_module_utils_loader
+from ansible.plugins.loader import module_utils_loader, ps_module_utils_loader
 from ansible.plugins.shell.powershell import async_watchdog, async_wrapper, become_wrapper, leaf_exec, exec_wrapper
 # Must import strategy and use write_locks from there
 # If we import write_locks directly then we end up binding a
@@ -579,7 +579,7 @@ def recursive_finder(name, data, py_module_names, py_module_cache, zf):
 
         zf.writestr(os.path.join("ansible/module_utils",
                     py_module_file_name), py_module_cache[py_module_name][0])
-        display.vvv("Using module_utils file %s" % py_module_cache[py_module_name][1])
+        display.vvvvv("Using module_utils file %s" % py_module_cache[py_module_name][1])
 
     # Add the names of the files we're scheduling to examine in the loop to
     # py_module_names so that we don't re-examine them in the next pass
@@ -836,8 +836,8 @@ def _find_module_utils(module_name, b_module_data, module_path, module_args, tas
     return (b_module_data, module_style, shebang)
 
 
-def modify_module(module_name, module_path, module_args, task_vars=dict(), module_compression='ZIP_STORED', async_timeout=0, become=False,
-                  become_method=None, become_user=None, become_password=None, environment=dict()):
+def modify_module(module_name, module_path, module_args, task_vars=None, module_compression='ZIP_STORED', async_timeout=0, become=False,
+                  become_method=None, become_user=None, become_password=None, environment=None):
     """
     Used to insert chunks of code into modules before transfer rather than
     doing regular python imports.  This allows for more efficient transfer in
@@ -858,6 +858,9 @@ def modify_module(module_name, module_path, module_args, task_vars=dict(), modul
     properties not available here.
 
     """
+    task_vars = {} if task_vars is None else task_vars
+    environment = {} if environment is None else environment
+
     with open(module_path, 'rb') as f:
 
         # read in the module source

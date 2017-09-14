@@ -402,6 +402,42 @@ is very very conservative::
 
     forks = 5
 
+.. _fact_caching:
+
+fact_caching
+============
+
+This option allows you to configure fact caching.  When a fact cache
+is enabled and there is valid data for a host, Ansible will use that rather than running an implicit ``setup`` job on a remote host.
+
+The value of this option should be the name of a cache plugin.
+Current versions of Ansible include ``redis`` and ``jsonfile``::
+
+    fact_caching = jsonfile
+
+.. _fact_caching_connection:
+
+fact_caching_connection
+=======================
+
+This option tells Ansible where to cache facts.  The value is plugin
+dependent.  For the ``jsonfile`` plugin, it should be a path to a
+local directory.  For the ``redis`` plugin, the value is a
+``host:port:database`` triplet::
+
+    fact_caching_connection = localhost:6379:0
+
+.. _fact_caching_timeout:
+
+fact_caching_timeout
+====================
+
+This option tells Ansible when to expire values from the cache.
+Setting this value to 0 effectively disables expiry, and a positive
+value is a TTL in seconds::
+
+    fact_caching_timeout = 86400
+
 .. _fact_path:
 
 fact_path
@@ -526,7 +562,7 @@ is a directory with multiple sources (static and dynamic)::
 
     inventory_ignore_extensions = ~, .orig, .bak, .ini, .cfg, .retry, .pyc, .pyo
 
-This option can be overridden by setting ``ANSIBLE_INVENTORY_IGNORE``
+This option can be overridden by setting :envvar:`ANSIBLE_INVENTORY_IGNORE`
 environment variable.
 
 .. _jinja2_extensions:
@@ -786,7 +822,7 @@ restrict_facts_namespace
 .. versionadded:: 2.4
 
 This allows restricting facts in their own namespace (under ansible_facts) instead of pushing them into the main.
-False by default. Can also be set via the environment variable `ANSIBLE_RESTRICT_FACTS`. Using `ansible_system` as an example:
+False by default. Can also be set via the environment variable :envvar:`ANSIBLE_RESTRICT_FACTS`. Using `ansible_system` as an example:
 
 When False::
 

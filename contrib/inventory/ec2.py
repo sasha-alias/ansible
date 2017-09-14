@@ -440,6 +440,7 @@ class Ec2Inventory(object):
             'group_by_ami_id',
             'group_by_instance_type',
             'group_by_instance_state',
+            'group_by_platform',
             'group_by_key_pair',
             'group_by_vpc_id',
             'group_by_security_group',
@@ -806,7 +807,7 @@ class Ec2Inventory(object):
             errors.append(' - AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment vars found but may not be correct')
 
         boto_paths = ['/etc/boto.cfg', '~/.boto', '~/.aws/credentials']
-        boto_config_found = list(p for p in boto_paths if os.path.isfile(os.path.expanduser(p)))
+        boto_config_found = [p for p in boto_paths if os.path.isfile(os.path.expanduser(p))]
         if len(boto_config_found) > 0:
             errors.append(" - Boto configs found at '%s', but the credentials contained may not be correct" % ', '.join(boto_config_found))
         else:
@@ -929,6 +930,16 @@ class Ec2Inventory(object):
             self.push(self.inventory, state_name, hostname)
             if self.nested_groups:
                 self.push_group(self.inventory, 'instance_states', state_name)
+
+        # Inventory: Group by platform
+        if self.group_by_platform:
+            if instance.platform:
+                platform = self.to_safe('platform_' + instance.platform)
+            else:
+                platform = self.to_safe('platform_undefined')
+            self.push(self.inventory, platform, hostname)
+            if self.nested_groups:
+                self.push_group(self.inventory, 'platforms', platform)
 
         # Inventory: Group by key pair
         if self.group_by_key_pair and instance.key_name:

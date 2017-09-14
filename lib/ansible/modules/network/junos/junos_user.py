@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'core'}
+                    'supported_by': 'network'}
 
 
 DOCUMENTATION = """
@@ -32,7 +32,7 @@ options:
         on the remote device.  The list of users will be compared against
         the current users and only changes will be added or removed from
         the device configuration.  This argument is mutually exclusive with
-        the name argument.
+        the name argument. alias C(users).
     version_added: "2.4"
     required: False
     default: null
@@ -57,7 +57,6 @@ options:
         remote system.  User accounts can have more than one role
         configured.
     required: false
-    default: read-only
     choices: ['operator', 'read-only', 'super-user', 'unauthorized']
   sshkey:
     description:
@@ -71,7 +70,7 @@ options:
       - The C(purge) argument instructs the module to consider the
         users definition absolute.  It will remove any previously configured
         users on the device with the exception of the current defined
-        set of users.
+        set of aggregate.
     required: false
     default: false
   state:
@@ -94,7 +93,8 @@ requirements:
   - ncclient (>=v0.5.2)
 notes:
   - This module requires the netconf system service be enabled on
-    the remote device being managed
+    the remote device being managed.
+  - Tested against vSRX JUNOS version 15.1X49-D15.4, vqfx-10000 JUNOS Version 15.1X53-D60.4.
 """
 
 EXAMPLES = """
@@ -112,7 +112,8 @@ EXAMPLES = """
 
 - name: remove all user accounts except ansible
   junos_user:
-    name: ansible
+    aggregate:
+    - name: ansible
     purge: yes
 
 - name: Create list of users
@@ -142,7 +143,11 @@ diff.prepared:
 """
 from functools import partial
 
+from copy import deepcopy
+
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.network_common import remove_default_spec
+from ansible.module_utils.netconf import send_request
 from ansible.module_utils.junos import junos_argument_spec, check_args
 from ansible.module_utils.junos import commit_configuration, discard_changes
 from ansible.module_utils.junos import load_config, locked_config
@@ -157,27 +162,47 @@ ROLES = ['operator', 'read-only', 'super-user', 'unauthorized']
 USE_PERSISTENT_CONNECTION = True
 
 
-def map_obj_to_ele(want):
+def handle_purge(module, want):
+    want_users = [item['name'] for item in want]
     element = Element('system')
-    login = SubElement(element, 'login', {'replace': 'replace'})
+    login = SubElement(element, 'login')
+
+    reply = send_request(module, Element('get-configuration'), ignore_warning=False)
+    users = reply.xpath('configuration/system/login/user/name')
+    if users:
+        for item in users:
+            name = item.text
+            if name not in want_users and name != 'root':
+                user = SubElement(login, 'user', {'operation': 'delete'})
+                SubElement(user, 'name').text = name
+    if element.xpath('/system/login/user/name'):
+        return element
+
+
+def map_obj_to_ele(module, want):
+    element = Element('system')
+    login = SubElement(element, 'login')
 
     for item in want:
         if item['state'] != 'present':
+            if item['name'] == 'root':
+                module.fail_json(msg="cannot delete the 'root' account.")
             operation = 'delete'
         else:
-            operation = 'replace'
+            operation = 'merge'
 
         user = SubElement(login, 'user', {'operation': operation})
 
         SubElement(user, 'name').text = item['name']
 
-        if operation == 'replace':
+        if operation == 'merge':
             if item['active']:
                 user.set('active', 'active')
             else:
                 user.set('inactive', 'inactive')
 
-            SubElement(user, 'class').text = item['role']
+            if item['role']:
+                SubElement(user, 'class').text = item['role']
 
             if item.get('full_name'):
                 SubElement(user, 'full-name').text = item['full_name']
@@ -258,32 +283,30 @@ def main():
     element_spec = dict(
         name=dict(),
         full_name=dict(),
-        role=dict(choices=ROLES, default='unauthorized'),
+        role=dict(choices=ROLES),
         sshkey=dict(),
         state=dict(choices=['present', 'absent'], default='present'),
-        active=dict(default=True, type='bool')
+        active=dict(type='bool', default=True)
     )
 
+    aggregate_spec = deepcopy(element_spec)
+    aggregate_spec['name'] = dict(required=True)
+
+    # remove default in aggregate spec, to handle common arguments
+    remove_default_spec(aggregate_spec)
+
     argument_spec = dict(
-        aggregate=dict(type='list', elements='dict', options=element_spec, aliases=['collection', 'users']),
+        aggregate=dict(type='list', elements='dict', options=aggregate_spec, aliases=['collection', 'users']),
         purge=dict(default=False, type='bool')
     )
 
     argument_spec.update(element_spec)
     argument_spec.update(junos_argument_spec)
 
-    required_one_of = [['aggregate', 'name']]
-    mutually_exclusive = [['aggregate', 'name'],
-                          ['aggregate', 'full_name'],
-                          ['aggregate', 'sshkey'],
-                          ['aggregate', 'state'],
-                          ['aggregate', 'active']]
-
-    argument_spec.update(junos_argument_spec)
+    mutually_exclusive = [['aggregate', 'name']]
 
     module = AnsibleModule(argument_spec=argument_spec,
                            mutually_exclusive=mutually_exclusive,
-                           required_one_of=required_one_of,
                            supports_check_mode=True)
 
     warnings = list()
@@ -292,14 +315,16 @@ def main():
     result = {'changed': False, 'warnings': warnings}
 
     want = map_params_to_obj(module)
-    ele = map_obj_to_ele(want)
+    ele = map_obj_to_ele(module, want)
 
-    kwargs = {}
+    purge_request = None
     if module.params['purge']:
-        kwargs['action'] = 'replace'
+        purge_request = handle_purge(module, want)
 
     with locked_config(module):
-        diff = load_config(module, tostring(ele), warnings, **kwargs)
+        if purge_request:
+            load_config(module, tostring(purge_request), warnings, action='replace')
+        diff = load_config(module, tostring(ele), warnings, action='merge')
 
         commit = not module.check_mode
         if diff:

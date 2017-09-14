@@ -14,9 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
-                    'supported_by': 'curated'}
+                    'supported_by': 'core'}
 
 
 DOCUMENTATION = '''
@@ -100,6 +100,49 @@ EXAMPLES = '''
 
 '''
 
+RETURN = '''
+vpc.id:
+    description: VPC resource id
+    returned: success
+    type: string
+    sample: vpc-b883b2c4
+vpc.cidr_block:
+    description: The CIDR of the VPC
+    returned: success
+    type: string
+    sample: "10.0.0.0/16"
+vpc.state:
+    description: state of the VPC
+    returned: success
+    type: string
+    sample: available
+vpc.tags:
+    description: tags attached to the VPC, includes name
+    returned: success
+    type: dict
+    sample: {"Name": "My VPC", "env": "staging"}
+vpc.classic_link_enabled:
+    description: indicates whether ClassicLink is enabled
+    returned: success
+    type: boolean
+    sample: false
+vpc.dhcp_options_id:
+    description: the id of the DHCP options assocaited with this VPC
+    returned: success
+    type: string
+    sample: dopt-67236184
+vpc.instance_tenancy:
+    description: indicates whther VPC uses default or dedicated tenancy
+    returned: success
+    type: string
+    sample: default
+vpc.is_default:
+    description: indicates whether this is the default VPC
+    returned: success
+    type: boolean
+    sample: false
+'''
+
 try:
     import boto
     import boto.ec2
@@ -109,16 +152,6 @@ try:
 except ImportError:
     HAS_BOTO=False
 
-def boto_exception(err):
-    '''generic error message handler'''
-    if hasattr(err, 'error_message'):
-        error = err.error_message
-    elif hasattr(err, 'message'):
-        error = err.message
-    else:
-        error = '%s: %s' % (Exception, err)
-
-    return error
 
 def vpc_exists(module, vpc, name, cidr_block, multi):
     """Returns None or a vpc object depending on the existence of a VPC. When supplied

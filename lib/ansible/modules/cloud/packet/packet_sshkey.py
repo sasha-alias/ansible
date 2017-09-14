@@ -6,7 +6,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -19,7 +19,7 @@ description:
      - Create/delete an SSH key in Packet host.
      - API is documented at U(https://www.packet.net/help/api/#page:ssh-keys,header:ssh-keys-ssh-keys-post).
 version_added: "2.3"
-author: "Tomas Karasek <tom.to.the.k@gmail.com>"
+author: "Tomas Karasek (@t0mk) <tom.to.the.k@gmail.com>"
 options:
   state:
     description:

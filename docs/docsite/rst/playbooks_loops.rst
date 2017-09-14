@@ -59,6 +59,31 @@ Also be aware that when combining `when` with `with_items` (or any other loop st
 
 Loops are actually a combination of things `with_` + `lookup()`, so any lookup plugin can be used as a source for a loop, 'items' is lookup.
 
+Please note that ``with_items`` flattens the first depth of the list it is
+provided and can yield unexpected results if you pass a list which is composed
+of lists. You can work around this by wrapping your nested list inside a list::
+
+    # This will run debug three times since the list is flattened
+    - debug:
+        msg: "{{ item }}"
+      vars:
+        nested_list:
+          - - one
+            - two
+            - three
+      with_items: "{{ nested_list }}"
+
+    # This will run debug once with the three items
+    - debug:
+        msg: "{{ item }}"
+      vars:
+        nested_list:
+          - - one
+            - two
+            - three
+      with_items:
+        - "{{ nested_list }}"
+
 .. _nested_loops:
 
 Nested Loops
@@ -424,6 +449,8 @@ been retried for 5 times with a delay of 10 seconds. The default value for "retr
 The task returns the results returned by the last task run. The results of individual retries can be viewed by -vv option.
 The registered variable will also have a new key "attempts" which will have the number of the retries for the task.
 
+.. note:: If the "until" parameter isn't defined, the value for the "retries" parameter is forced to 1.
+
 .. _with_first_found:
 
 Finding First Matched Files
@@ -674,7 +701,7 @@ Looping over the inventory
 ``````````````````````````
 
 If you wish to loop over the inventory, or just a subset of it, there is multiple ways.
-One can use a regular ``with_items`` with the ``play_hosts`` or ``groups`` variables, like this::
+One can use a regular ``with_items`` with the ``ansible_play_batch`` or ``groups`` variables, like this::
 
     # show all the hosts in the inventory
     - debug:
@@ -686,7 +713,7 @@ One can use a regular ``with_items`` with the ``play_hosts`` or ``groups`` varia
     - debug:
         msg: "{{ item }}"
       with_items:
-        - "{{ play_hosts }}"
+        - "{{ ansible_play_batch }}"
 
 There is also a specific lookup plugin ``inventory_hostnames`` that can be used like this::
 

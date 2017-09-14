@@ -10,7 +10,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 #
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -126,16 +126,16 @@ from ansible.module_utils.basic import AnsibleModule
 
 def match_opt(option, line):
     option = re.escape(option)
-    return re.match(' *%s( |\t)*=' % option, line) \
-      or re.match('# *%s( |\t)*=' % option, line) \
-      or re.match('; *%s( |\t)*=' % option, line)
+    return re.match('( |\t)*%s( |\t)*=' % option, line) \
+      or re.match('#( |\t)*%s( |\t)*=' % option, line) \
+      or re.match(';( |\t)*%s( |\t)*=' % option, line)
 
 # ==============================================================
 # match_active_opt
 
 def match_active_opt(option, line):
     option = re.escape(option)
-    return re.match(' *%s( |\t)*=' % option, line)
+    return re.match('( |\t)*%s( |\t)*=' % option, line)
 
 # ==============================================================
 # do_ini

@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'core'}
+                    'supported_by': 'network'}
 
 
 DOCUMENTATION = """
@@ -100,7 +100,8 @@ requirements:
   - ncclient (>=v0.5.2)
 notes:
   - This module requires the netconf system service be enabled on
-    the remote device being managed
+    the remote device being managed.
+  - Tested against vSRX JUNOS version 15.1X49-D15.4, vqfx-10000 JUNOS Version 15.1X53-D60.4.
 """
 
 EXAMPLES = """
@@ -174,6 +175,7 @@ from ansible.module_utils.junos import junos_argument_spec, check_args, get_conf
 from ansible.module_utils.netcli import Conditional, FailedConditionalError
 from ansible.module_utils.netconf import send_request
 from ansible.module_utils.six import string_types, iteritems
+from ansible.module_utils.connection import Connection
 
 try:
     from lxml.etree import Element, SubElement, tostring
@@ -313,6 +315,7 @@ def parse_commands(module, warnings):
                 'Only show commands are supported when using check_mode, not '
                 'executing %s' % command
             )
+            continue
 
         parts = command.split('|')
         text = parts[0]
@@ -363,6 +366,18 @@ def main():
 
     warnings = list()
     check_args(module, warnings)
+
+    if module.params['provider'] and module.params['provider']['transport'] == 'cli':
+        if any((module.params['wait_for'], module.params['match'], module.params['rpcs'])):
+            module.warn('arguments wait_for, match, rpcs are not supported when using transport=cli')
+        commands = module.params['commands']
+        conn = Connection(module)
+        output = list()
+        for cmd in commands:
+            output.append(conn.get(cmd))
+        lines = [out.split('\n') for out in output]
+        result = {'changed': False, 'stdout': output, 'stdout_lines': lines}
+        module.exit_json(**result)
 
     items = list()
     items.extend(parse_commands(module, warnings))

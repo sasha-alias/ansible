@@ -7,7 +7,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -32,7 +32,7 @@ options:
   key:
     description:
       - The SSH public host key, as a string (required if state=present, optional when state=absent, in which case all keys for the host are removed).
-        The key must be in the right format for ssh (see sshd(1), section "SSH_KNOWN_HOSTS FILE FORMAT")
+        The key must be in the right format for ssh (see sshd(8), section "SSH_KNOWN_HOSTS FILE FORMAT")
     required: false
     default: null
   path:

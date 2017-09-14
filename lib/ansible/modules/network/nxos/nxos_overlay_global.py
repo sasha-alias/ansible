@@ -16,10 +16,9 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {
-    'metadata_version': '1.0',
-    'status': ['preview'],
-    'supported_by': 'community'}
+ANSIBLE_METADATA = {'metadata_version': '1.1',
+                    'status': ['preview'],
+                    'supported_by': 'network'}
 
 DOCUMENTATION = '''
 ---
@@ -31,6 +30,7 @@ description:
   - Configures anycast gateway MAC of the switch.
 author: Gabriele Gerbino (@GGabriele)
 notes:
+  - Tested against NXOSv 7.3.(0)D1(1) on VIRL
   - Default restores params default value
   - Supported MAC address format are "E.E.E", "EE-EE-EE-EE-EE-EE",
     "EE:EE:EE:EE:EE:EE" and "EEEE.EEEE.EEEE"
@@ -72,11 +72,12 @@ def get_existing(module, args):
 
     for arg in args:
         command = PARAM_TO_COMMAND_KEYMAP[arg]
-        has_command = re.match(r'(?:{0}\s)(?P<value>.*)$'.format(command), config, re.M)
+        has_command = re.findall(r'(?:{0}\s)(?P<value>.*)$'.format(command), config, re.M)
         value = ''
         if has_command:
-            value = has_command.group('value')
+            value = has_command[0]
         existing[arg] = value
+
     return existing
 
 
@@ -94,22 +95,23 @@ def get_commands(module, existing, proposed, candidate):
     proposed_commands = apply_key_map(PARAM_TO_COMMAND_KEYMAP, proposed)
     existing_commands = apply_key_map(PARAM_TO_COMMAND_KEYMAP, existing)
 
-    for key, value in proposed_commands.items():
-        if value == 'default':
-            existing_value = existing_commands.get(key)
-            if existing_value:
-                commands.append('no {0} {1}'.format(key, existing_value))
-        else:
-            if 'anycast-gateway-mac' in key:
-                value = normalize_mac(value, module)
-            command = '{0} {1}'.format(key, value)
-            commands.append(command)
-
+    for key, proposed in proposed_commands.items():
+        existing_value = existing_commands.get(key)
+        if proposed == 'default' and existing_value:
+            commands.append('no {0} {1}'.format(key, existing_value))
+        elif 'anycast-gateway-mac' in key and proposed != 'default':
+            proposed = normalize_mac(proposed, module)
+            existing_value = normalize_mac(existing_value, module)
+            if proposed != existing_value:
+                command = '{0} {1}'.format(key, proposed)
+                commands.append(command)
     if commands:
         candidate.add(commands, parents=[])
 
 
 def normalize_mac(proposed_mac, module):
+    if proposed_mac is None:
+        return ''
     try:
         if '-' in proposed_mac:
             splitted_mac = proposed_mac.split('-')

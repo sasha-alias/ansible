@@ -12,7 +12,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -23,9 +23,9 @@ module: maven_artifact
 short_description: Downloads an Artifact from a Maven Repository
 version_added: "2.0"
 description:
-    - Downloads an artifact from a maven repository given the maven coordinates provided to the module. Can retrieve
-    - snapshots or release versions of the artifact and will resolve the latest available version if one is not
-    - available.
+    - Downloads an artifact from a maven repository given the maven coordinates provided to the module.
+    - Can retrieve snapshots or release versions of the artifact and will resolve the latest available
+      version if one is not available.
 author: "Chris Schmidt (@chrisisbeef)"
 requirements:
     - "python >= 2.6"
@@ -76,6 +76,7 @@ options:
     dest:
         description:
             - The path where the artifact should be written to
+            - If file mode or ownerships are specified and destination path already exists, they affect the downloaded file
         required: true
         default: false
     state:
@@ -102,9 +103,11 @@ options:
             - If C(yes), the downloaded artifact's name is preserved, i.e the version number remains part of it.
             - This option only has effect when C(dest) is a directory and C(version) is set to C(latest).
         required: false
-        default: no
+        default: 'no'
         choices: ['yes', 'no']
         version_added: "2.4"
+extends_documentation_fragment:
+    - files
 '''
 
 EXAMPLES = '''
@@ -163,10 +166,39 @@ except ImportError:
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.six.moves.urllib.parse import urlparse
 from ansible.module_utils.urls import fetch_url
+from ansible.module_utils._text import to_bytes
+
+
+def split_pre_existing_dir(dirname):
+    '''
+    Return the first pre-existing directory and a list of the new directories that will be created.
+    '''
+
+    head, tail = os.path.split(dirname)
+    b_head = to_bytes(head, errors='surrogate_or_strict')
+    if not os.path.exists(b_head):
+        (pre_existing_dir, new_directory_list) = split_pre_existing_dir(head)
+    else:
+        return head, [tail]
+    new_directory_list.append(tail)
+    return pre_existing_dir, new_directory_list
+
+
+def adjust_recursive_directory_permissions(pre_existing_dir, new_directory_list, module, directory_args, changed):
+    '''
+    Walk the new directories list and make sure that permissions are as we would expect
+    '''
+
+    if len(new_directory_list) > 0:
+        working_dir = os.path.join(pre_existing_dir, new_directory_list.pop(0))
+        directory_args['path'] = working_dir
+        changed = module.set_fs_attributes_if_different(directory_args, changed)
+        changed = adjust_recursive_directory_permissions(working_dir, new_directory_list, module, directory_args, changed)
+    return changed
 
 
 class Artifact(object):
-    def __init__(self, group_id, artifact_id, version, classifier=None, extension='jar'):
+    def __init__(self, group_id, artifact_id, version, classifier='', extension='jar'):
         if not group_id:
             raise ValueError("group_id must be set")
         if not artifact_id:
@@ -261,10 +293,9 @@ class MavenDownloader:
             timestamp = xml.xpath("/metadata/versioning/snapshot/timestamp/text()")[0]
             buildNumber = xml.xpath("/metadata/versioning/snapshot/buildNumber/text()")[0]
             for snapshotArtifact in xml.xpath("/metadata/versioning/snapshotVersions/snapshotVersion"):
-                if (len(snapshotArtifact.xpath("classifier/text()")) > 0 and
-                        snapshotArtifact.xpath("classifier/text()")[0] == artifact.classifier and
-                        len(snapshotArtifact.xpath("extension/text()")) > 0 and
-                        snapshotArtifact.xpath("extension/text()")[0] == artifact.extension):
+                artifact_classifier = snapshotArtifact.xpath("classifier/text()")[0] if len(snapshotArtifact.xpath("classifier/text()")) > 0 else ''
+                artifact_extension = snapshotArtifact.xpath("extension/text()")[0] if len(snapshotArtifact.xpath("extension/text()")) > 0 else ''
+                if artifact_classifier == artifact.classifier and artifact_extension == artifact.extension:
                     return self._uri_for_artifact(artifact, snapshotArtifact.xpath("value/text()")[0])
             return self._uri_for_artifact(artifact, artifact.version.replace("SNAPSHOT", timestamp + "-" + buildNumber))
 
@@ -375,7 +406,7 @@ def main():
             group_id = dict(default=None),
             artifact_id = dict(default=None),
             version = dict(default="latest"),
-            classifier = dict(default=None),
+            classifier = dict(default=''),
             extension = dict(default='jar'),
             repository_url = dict(default=None),
             username = dict(default=None,aliases=['aws_secret_key']),
@@ -385,7 +416,8 @@ def main():
             dest = dict(type="path", default=None),
             validate_certs = dict(required=False, default=True, type='bool'),
             keep_name = dict(required=False, default=False, type='bool'),
-        )
+        ),
+        add_file_common_args=True
     )
 
     repository_url = module.params["repository_url"]
@@ -407,6 +439,7 @@ def main():
     extension = module.params["extension"]
     state = module.params["state"]
     dest = module.params["dest"]
+    b_dest = to_bytes(dest, errors='surrogate_or_strict')
     keep_name = module.params["keep_name"]
 
     #downloader = MavenDownloader(module, repository_url, repository_username, repository_password)
@@ -417,30 +450,49 @@ def main():
     except ValueError as e:
         module.fail_json(msg=e.args[0])
 
+    changed = False
     prev_state = "absent"
-    if os.path.isdir(dest):
+
+    if dest.endswith(os.sep):
+        b_dest = to_bytes(dest, errors='surrogate_or_strict')
+        if not os.path.exists(b_dest):
+            (pre_existing_dir, new_directory_list) = split_pre_existing_dir(dest)
+            os.makedirs(b_dest)
+            directory_args = module.load_file_common_arguments(module.params)
+            directory_mode = module.params["directory_mode"]
+            if directory_mode is not None:
+                directory_args['mode'] = directory_mode
+            else:
+                directory_args['mode'] = None
+            changed = adjust_recursive_directory_permissions(pre_existing_dir, new_directory_list, module, directory_args, changed)
+
+    if os.path.isdir(b_dest):
         version_part = version
         if keep_name and version == 'latest':
             version_part = downloader.find_latest_version_available(artifact)
         dest = posixpath.join(dest, "%s-%s.%s" % (artifact_id, version_part, extension))
-    if os.path.lexists(dest) and downloader.verify_md5(dest, downloader.find_uri_for_artifact(artifact) + '.md5'):
+        b_dest = to_bytes(dest, errors='surrogate_or_strict')
+
+    if os.path.lexists(b_dest) and downloader.verify_md5(dest, downloader.find_uri_for_artifact(artifact) + '.md5'):
         prev_state = "present"
+
+    if prev_state == "absent":
+        try:
+            if downloader.download(artifact, b_dest):
+                changed = True
+            else:
+                module.fail_json(msg="Unable to download the artifact")
+        except ValueError as e:
+            module.fail_json(msg=e.args[0])
+
+    module.params['dest'] = dest
+    file_args = module.load_file_common_arguments(module.params)
+    changed = module.set_fs_attributes_if_different(file_args, changed)
+    if changed:
+        module.exit_json(state=state, dest=dest, group_id=group_id, artifact_id=artifact_id, version=version, classifier=classifier,
+                         extension=extension, repository_url=repository_url, changed=changed)
     else:
-        path = os.path.dirname(dest)
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-    if prev_state == "present":
-        module.exit_json(dest=dest, state=state, changed=False)
-
-    try:
-        if downloader.download(artifact, dest):
-            module.exit_json(state=state, dest=dest, group_id=group_id, artifact_id=artifact_id, version=version, classifier=classifier,
-                             extension=extension, repository_url=repository_url, changed=True)
-        else:
-            module.fail_json(msg="Unable to download the artifact")
-    except ValueError as e:
-        module.fail_json(msg=e.args[0])
+        module.exit_json(state=state, dest=dest, changed=changed)
 
 
 if __name__ == '__main__':

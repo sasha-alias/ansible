@@ -8,7 +8,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
                     'supported_by': 'community'}
 
@@ -199,6 +199,7 @@ from email.utils import parseaddr, formataddr
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.header import Header
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils._text import to_native
@@ -246,7 +247,6 @@ def main():
     sender_phrase, sender_addr = parseaddr(sender)
     secure_state = False
     code = 0
-    auth_flag = ""
 
     if not body:
         body = subject
@@ -269,7 +269,6 @@ def main():
                 module.fail_json(rc=1, msg='Unable to Connect to %s:%s: %s' %
                                  (host, port, to_native(e)), exception=traceback.format_exc())
 
-
     if (secure == 'always'):
         try:
             smtp = smtplib.SMTP_SSL(timeout=timeout)
@@ -286,8 +285,6 @@ def main():
             module.fail_json(rc=1, msg='Helo failed for host %s:%s: %s' %
                              (host, port, to_native(e)), exception=traceback.format_exc())
 
-        auth_flag = smtp.has_extn('AUTH')
-
         if secure in ('try', 'starttls'):
             if smtp.has_extn('STARTTLS'):
                 try:
@@ -303,7 +300,7 @@ def main():
                     module.fail_json(rc=1, msg='StartTLS is not offered on server %s:%s' % (host, port))
 
     if username and password:
-        if auth_flag:
+        if smtp.has_extn('AUTH'):
             try:
                 smtp.login(username, password)
             except smtplib.SMTPAuthenticationError:
@@ -314,14 +311,16 @@ def main():
             module.fail_json(rc=1, msg="No Authentication on the server at %s:%s" % (host, port))
 
     msg = MIMEMultipart()
-    msg['Subject'] = subject
-    msg['From'] = formataddr((sender_phrase, sender_addr))
+    msg['Subject'] = Header(subject, charset)
+    msg['From'] = Header(formataddr((sender_phrase, sender_addr)), charset)
     msg.preamble = "Multipart message"
+    msg.set_charset(charset)
 
     if headers is not None:
         for hdr in [x.strip() for x in headers.split('|')]:
             try:
                 h_key, h_val = hdr.split('=')
+                h_val = to_native(Header(h_val, charset))
                 msg.add_header(h_key, h_val)
             except:
                 pass

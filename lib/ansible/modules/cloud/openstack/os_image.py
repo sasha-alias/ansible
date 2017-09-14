@@ -18,7 +18,7 @@
 
 #TODO(mordred): we need to support "location"(v1) and "locations"(v2)
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -164,9 +164,11 @@ def main():
 
         if module.params['state'] == 'present':
             if not image:
+                kwargs={}
+                if module.params['id'] is not None:
+                    kwargs['id'] = module.params['id']
                 image = cloud.create_image(
                     name=module.params['name'],
-                    id=module.params['id'],
                     filename=module.params['filename'],
                     disk_format=module.params['disk_format'],
                     container_format=module.params['container_format'],
@@ -174,7 +176,8 @@ def main():
                     timeout=module.params['timeout'],
                     is_public=module.params['is_public'],
                     min_disk=module.params['min_disk'],
-                    min_ram=module.params['min_ram']
+                    min_ram=module.params['min_ram'],
+                    **kwargs
                 )
                 changed = True
                 if not module.params['wait']:

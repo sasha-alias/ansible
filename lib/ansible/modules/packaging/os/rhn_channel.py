@@ -8,7 +8,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'core'}
 
@@ -22,36 +22,32 @@ description:
 version_added: "1.1"
 author: "Vincent Van der Kussen (@vincentvdk)"
 notes:
-    - this module fetches the system id from RHN.
-requirements:
-    - none
+    - This module fetches the system id from RHN.
+    - This module doesn't support I(check_mode).
 options:
     name:
         description:
-            - name of the software channel
+            - Name of the software channel.
         required: true
-        default: null
     sysname:
         description:
-            - name of the system as it is known in RHN/Satellite
+            - Name of the system as it is known in RHN/Satellite.
         required: true
-        default: null
     state:
         description:
-            - whether the channel should be present or not
-        required: false
+            - Whether the channel should be present or not, taking action if the state is different from what is stated.
         default: present
     url:
         description:
-            - The full url to the RHN/Satellite api
+            - The full URL to the RHN/Satellite API.
         required: true
     user:
         description:
-            - RHN/Satellite user
+            - RHN/Satellite login
         required: true
     password:
         description:
-            - "the user's password"
+            - RHN/Satellite password
         required: true
 '''
 
@@ -64,9 +60,8 @@ EXAMPLES = '''
     password: guessme
 '''
 
-import xmlrpclib
-from operator import itemgetter
-import re
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.six.moves import xmlrpc_client
 
 
 # ------------------------------------------------------- #
@@ -78,16 +73,6 @@ def get_systemid(client, session, sysname):
             idres = system.get('id')
             idd = int(idres)
             return idd
-
-# ------------------------------------------------------- #
-
-# unused:
-#
-#def get_localsystemid():
-#    f = open("/etc/sysconfig/rhn/systemid", "r")
-#    content = f.read()
-#    loc_id = re.search(r'\b(ID-)(\d{10})' ,content)
-#    return loc_id.group(2)
 
 # ------------------------------------------------------- #
 
@@ -127,7 +112,6 @@ def main():
             user = dict(required=True),
             password = dict(required=True, aliases=['pwd'], no_log=True),
         )
-        #        supports_check_mode=True
     )
 
     state = module.params['state']
@@ -137,8 +121,8 @@ def main():
     user = module.params['user']
     password = module.params['password']
 
-    #initialize connection
-    client = xmlrpclib.Server(saturl, verbose=0)
+    # initialize connection
+    client = xmlrpc_client.Server(saturl)
     session = client.auth.login(user, password)
 
     # get systemid
@@ -147,26 +131,23 @@ def main():
     # get channels for system
     chans = base_channels(client, session, sys_id)
 
+    try:
+        if state == 'present':
+            if channelname in chans:
+                module.exit_json(changed=False, msg="Channel %s already exists" % channelname)
+            else:
+                subscribe_channels(channelname, client, session, systname, sys_id)
+                module.exit_json(changed=True, msg="Channel %s added" % channelname)
 
-    if state == 'present':
-        if channelname in chans:
-            module.exit_json(changed=False, msg="Channel %s already exists" % channelname)
-        else:
-            subscribe_channels(channelname, client, session, systname, sys_id)
-            module.exit_json(changed=True, msg="Channel %s added" % channelname)
+        if state == 'absent':
+            if not channelname in chans:
+                module.exit_json(changed=False, msg="Not subscribed to channel %s." % channelname)
+            else:
+                unsubscribe_channels(channelname, client, session, systname, sys_id)
+                module.exit_json(changed=True, msg="Channel %s removed" % channelname)
+    finally:
+        client.auth.logout(session)
 
-    if state == 'absent':
-        if not channelname in chans:
-            module.exit_json(changed=False, msg="Not subscribed to channel %s." % channelname)
-        else:
-            unsubscribe_channels(channelname, client, session, systname, sys_id)
-            module.exit_json(changed=True, msg="Channel %s removed" % channelname)
-
-    client.auth.logout(session)
-
-
-# import module snippets
-from ansible.module_utils.basic import *
 
 if __name__ == '__main__':
     main()

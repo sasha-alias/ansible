@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this software.  If not, see <http://www.gnu.org/licenses/>.
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -56,7 +56,7 @@ EXAMPLES = '''
 
 - name: Show openstack facts
   debug:
-    var: openstack
+    var: openstack_image
 '''
 
 RETURN = '''
@@ -167,4 +167,3 @@ from ansible.module_utils.basic import *
 from ansible.module_utils.openstack import *
 if __name__ == '__main__':
     main()
-

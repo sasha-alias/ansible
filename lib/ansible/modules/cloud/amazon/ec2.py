@@ -14,9 +14,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
-                    'supported_by': 'curated'}
+                    'supported_by': 'core'}
 
 
 DOCUMENTATION = '''
@@ -227,7 +227,8 @@ options:
   instance_initiated_shutdown_behavior:
     version_added: "2.2"
     description:
-    - Set whether AWS will Stop or Terminate an instance on shutdown
+    - Set whether AWS will Stop or Terminate an instance on shutdown. This parameter is ignored when using instance-store
+      images (which require termination on shutdown).
     required: false
     default: 'stop'
     choices: [ "stop", "terminate" ]
@@ -706,6 +707,9 @@ def get_reservations(module, ec2, vpc, tags=None, state=None, zone=None):
 
     if zone:
         filters.update({'availability-zone': zone})
+
+    if module.params.get('id'):
+        filters['client-token'] = module.params['id']
 
     results = ec2.get_all_instances(filters=filters)
 
@@ -1190,7 +1194,16 @@ def create_instances(module, ec2, vpc, override_count=None):
                 # (the default) or 'terminate' here.
                 params['instance_initiated_shutdown_behavior'] = instance_initiated_shutdown_behavior or 'stop'
 
-                res = ec2.run_instances(**params)
+                try:
+                    res = ec2.run_instances(**params)
+                except boto.exception.EC2ResponseError as e:
+                    if (params['instance_initiated_shutdown_behavior'] != 'terminate' and
+                            "InvalidParameterCombination" == e.error_code):
+                        params['instance_initiated_shutdown_behavior'] = 'terminate'
+                        res = ec2.run_instances(**params)
+                    else:
+                        raise
+
                 instids = [i.id for i in res.instances]
                 while True:
                     try:
@@ -1423,6 +1436,8 @@ def startstop_instances(module, ec2, instance_ids, state, instance_tags):
         for key, value in instance_tags.items():
             filters["tag:" + key] = value
 
+    if module.params.get('id'):
+        filters['client-token'] = module.params['id']
     # Check that our instances are not in the state we want to take
 
     # Check (and eventually change) instances attributes and instances state
@@ -1548,6 +1563,8 @@ def restart_instances(module, ec2, instance_ids, state, instance_tags):
     if instance_tags:
         for key, value in instance_tags.items():
             filters["tag:" + key] = value
+    if module.params.get('id'):
+        filters['client-token'] = module.params['id']
 
     # Check that our instances are not in the state we want to take
 

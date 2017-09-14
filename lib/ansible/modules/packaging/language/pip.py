@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'curated'}
+                    'supported_by': 'core'}
 
 
 DOCUMENTATION = '''
@@ -250,7 +250,7 @@ def _get_full_name(name, version=None):
 def _get_packages(module, pip, chdir):
     '''Return results of pip command to get packages.'''
     # Try 'pip list' command first.
-    command = '%s list' % pip
+    command = '%s list --format=freeze' % pip
     lang_env = dict(LANG='C', LC_ALL='C', LC_MESSAGES='C')
     rc, out, err = module.run_command(command, cwd=chdir, environ_update=lang_env)
 
@@ -267,19 +267,8 @@ def _get_packages(module, pip, chdir):
 def _is_present(name, version, installed_pkgs, pkg_command):
     '''Return whether or not package is installed.'''
     for pkg in installed_pkgs:
-        # Package listing will be different depending on which pip
-        # command was used ('pip list' vs. 'pip freeze').
-        if 'list' in pkg_command:
-            pkg = pkg.replace('(', '').replace(')', '')
-            if ',' in pkg:
-                pkg_name, pkg_version, _ = pkg.replace(',', '').split(' ')
-            else:
-                pkg_name, pkg_version = pkg.split(' ')
-        elif 'freeze' in pkg_command:
-            if '==' in pkg:
-                pkg_name, pkg_version = pkg.split('==')
-            else:
-                continue
+        if '==' in pkg:
+            pkg_name, pkg_version = pkg.split('==')
         else:
             continue
 
@@ -436,9 +425,10 @@ def main():
         out = ''
 
         env = module.params['virtualenv']
-
+        venv_created = False
         if env:
             if not os.path.exists(os.path.join(env, 'bin', 'activate')):
+                venv_created = True
                 if module.check_mode:
                     module.exit_json(changed=True)
 
@@ -576,6 +566,8 @@ def main():
             else:
                 _, out_freeze_after, _ = _get_packages(module, pip, chdir)
                 changed = out_freeze_before != out_freeze_after
+
+        changed = changed or venv_created
 
         module.exit_json(changed=changed, cmd=cmd, name=name, version=version,
                          state=state, requirements=requirements, virtualenv=env,

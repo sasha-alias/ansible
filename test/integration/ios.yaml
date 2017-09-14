@@ -6,7 +6,7 @@
   vars:
     limit_to: "*"
     debug: false
-# Run the tests within blocks allows the the next module to be tested if the previous one fails.
+# Run the tests within blocks allows the next module to be tested if the previous one fails.
 # This is done to allow https://github.com/ansible/dci-partner-ansible/ to run the full set of tests.
 
 
@@ -92,6 +92,15 @@
       rescue:
         - set_fact:
             failed_modules: "{{ failed_modules }} + [ 'ios_logging' ]"
+            test_failed: true
+
+    - block:
+      - include_role:
+          name: ios_ping
+        when: "limit_to in ['*', 'ios_ping']"
+      rescue:
+        - set_fact:
+            failed_modules: "{{ failed_modules }} + [ 'ios_ping' ]"
             test_failed: true
 
 ###########

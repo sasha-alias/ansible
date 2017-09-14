@@ -14,7 +14,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -35,7 +35,7 @@ options:
 
     state:
         description:
-            - state of the package, you can use "installed" as an alias for C(present) and removed as one for c(absent).
+            - state of the package, you can use "installed" as an alias for C(present) and removed as one for C(absent).
         choices: [ 'present', 'absent', 'latest' ]
         required: false
         default: present

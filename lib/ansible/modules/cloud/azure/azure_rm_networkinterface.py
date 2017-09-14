@@ -9,9 +9,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'curated'}
+                    'supported_by': 'certified'}
 
 
 DOCUMENTATION = '''
@@ -57,7 +57,7 @@ options:
               when creating a network interface.
         aliases:
             - virtual_network
-        required: false
+        required: true
         default: null
     subnet_name:
         description:
@@ -65,7 +65,7 @@ options:
               interface
         aliases:
             - subnet
-        required: false
+        required: true
         default: null
     os_type:
         description:

@@ -1,30 +1,41 @@
 # (c) 2012-2014, Michael DeHaan <michael.dehaan@gmail.com>
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-'''
-DOCUMENTATION:
+# (c) 2017 Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
+DOCUMENTATION = '''
     callback: default
+    type: stdout
     short_description: default Ansible screen output
     version_added: historical
     description:
         - This is the default output callback for ansible-playbook.
+    options:
+      show_skipped_hosts:
+        name: Show skipped hosts
+        description: "Toggle to control displaying skipped task/host results in a task"
+        default: True
+        env:
+          - name: DISPLAY_SKIPPED_HOSTS
+        ini:
+          - key: display_skipped_hosts
+            section: defaults
+        type: boolean
+      show_custom_stats:
+        name: Show custom stats
+        description: 'This adds the custom stats set via the set_stats plugin to the play recap'
+        default: False
+        env:
+          - name: ANSIBLE_SHOW_CUSTOM_STATS
+        ini:
+          - key: show_custom_stats
+            section: defaults
+        type: bool
+    requirements:
+      - set as stdout in configuration
 '''
-# Make coding more python3-ish
-from __future__ import (absolute_import, division, print_function)
-__metaclass__ = type
 
 from ansible import constants as C
 from ansible.playbook.task_include import TaskInclude
@@ -107,7 +118,7 @@ class CallbackModule(CallbackBase):
             self._display.display(msg, color=color)
 
     def v2_runner_on_skipped(self, result):
-        if C.DISPLAY_SKIPPED_HOSTS:
+        if self._plugin_options['show_skipped_hosts']:
 
             delegated_vars = result._result.get('_ansible_delegated_vars', None)
             self._clean_results(result._result, result._task.action)
@@ -236,7 +247,7 @@ class CallbackModule(CallbackBase):
         self._display.display(msg + " (item=%s) => %s" % (self._get_item(result._result), self._dump_results(result._result)), color=C.COLOR_ERROR)
 
     def v2_runner_item_on_skipped(self, result):
-        if C.DISPLAY_SKIPPED_HOSTS:
+        if self._plugin_options['show_skipped_hosts']:
             self._clean_results(result._result, result._task.action)
             msg = "skipping: [%s] => (item=%s) " % (result._host.get_name(), self._get_item(result._result))
             if (self._display.verbosity > 0 or '_ansible_verbose_always' in result._result) and '_ansible_verbose_override' not in result._result:
@@ -275,7 +286,7 @@ class CallbackModule(CallbackBase):
         self._display.display("", screen_only=True)
 
         # print custom stats
-        if C.SHOW_CUSTOM_STATS and stats.custom:
+        if self._plugin_options['show_custom_stats'] and stats.custom:
             self._display.banner("CUSTOM STATS: ")
             # per host
             # TODO: come up with 'pretty format'
@@ -296,11 +307,11 @@ class CallbackModule(CallbackBase):
             self._display.banner("PLAYBOOK: %s" % basename(playbook._file_name))
 
         if self._display.verbosity > 3:
-            if self._options is not None:
-                for option in dir(self._options):
+            if self._plugin_options is not None:
+                for option in dir(self._plugin_options):
                     if option.startswith('_') or option in ['read_file', 'ensure_value', 'read_module']:
                         continue
-                    val = getattr(self._options, option)
+                    val = getattr(self._plugin_options, option)
                     if val:
                         self._display.vvvv('%s: %s' % (option, val))
 

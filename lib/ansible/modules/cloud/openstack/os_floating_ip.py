@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this software.  If not, see <http://www.gnu.org/licenses/>.
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -218,7 +218,7 @@ def main():
                     module.fail_json(msg="server {server} already has a "
                                          "floating-ip on requested "
                                          "interface but it doesn't match "
-                                         "requested network {network: {fip}"
+                                         "requested network {network}: {fip}"
                                      .format(server=server_name_or_id,
                                              network=network,
                                              fip=remove_values(f_ip,

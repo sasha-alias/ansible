@@ -72,7 +72,7 @@ class AWSRetry(CloudRetry):
         return error.response['Error']['Code']
 
     @staticmethod
-    def found(response_code):
+    def found(response_code, catch_extra_error_codes):
         # This list of failures is based on this API Reference
         # http://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html
         #
@@ -85,14 +85,14 @@ class AWSRetry(CloudRetry):
         # https://github.com/boto/boto3/issues/876 (and linked PRs etc)
         retry_on = [
             'RequestLimitExceeded', 'Unavailable', 'ServiceUnavailable',
-            'InternalFailure', 'InternalError', 'TooManyRequestsException'
+            'InternalFailure', 'InternalError', 'TooManyRequestsException',
+            'Throttling'
         ]
+        if catch_extra_error_codes:
+            retry_on.extend(catch_extra_error_codes)
 
         not_found = re.compile(r'^\w+.NotFound')
-        if response_code in retry_on or not_found.search(response_code):
-            return True
-        else:
-            return False
+        return response_code in retry_on or not_found.search(response_code)
 
 
 def boto3_conn(module, conn_type=None, resource=None, region=None, endpoint=None, **params):
@@ -124,6 +124,23 @@ def _boto3_conn(conn_type=None, resource=None, region=None, endpoint=None, **par
         return client, resource
 
 boto3_inventory_conn = _boto3_conn
+
+
+def boto_exception(err):
+    """
+    Extracts the error message from a boto exception.
+
+    :param err: Exception from boto
+    :return: Error message
+    """
+    if hasattr(err, 'error_message'):
+        error = err.error_message
+    elif hasattr(err, 'message'):
+        error = str(err.message) + ' ' + str(err) + ' - ' + str(type(err))
+    else:
+        error = '%s: %s' % (Exception, err)
+
+    return error
 
 
 def aws_common_argument_spec():
@@ -313,37 +330,6 @@ def ec2_connect(module):
         module.fail_json(msg="Either region or ec2_url must be specified")
 
     return ec2
-
-
-def paging(pause=0, marker_property='marker', result_key=None):
-    """ Adds paging to boto retrieval functions that support a 'marker'
-        this is configurable as not all boto functions seem to use the
-        same name.
-    """
-    def wrapper(f):
-        def page(*args, **kwargs):
-            results = []
-            marker = None
-            while True:
-                try:
-                    if marker:
-                        kwargs[marker_property] = marker
-                    new = f(*args, **kwargs)
-                    marker = new.get(marker_property)
-                    if result_key:
-                        new = new[result_key]
-                    results.extend(new)
-                    if not marker:
-                        break
-                    elif pause:
-                        sleep(pause)
-                except TypeError:
-                    # Older version of boto do not allow for marker param, just run normally
-                    results = f(*args, **kwargs)
-                    break
-            return results
-        return page
-    return wrapper
 
 
 def _camel_to_snake(name):

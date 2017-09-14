@@ -29,6 +29,7 @@ import hashlib
 import os
 
 from ansible.module_utils import six
+from ansible.module_utils._text import to_bytes
 
 
 class OpenSSLObjectError(Exception):
@@ -63,7 +64,7 @@ def load_privatekey(path, passphrase=None):
         if passphrase:
             privatekey = crypto.load_privatekey(crypto.FILETYPE_PEM,
                                                 open(path, 'rb').read(),
-                                                passphrase)
+                                                to_bytes(passphrase))
         else:
             privatekey = crypto.load_privatekey(crypto.FILETYPE_PEM,
                                                 open(path, 'rb').read())
@@ -108,6 +109,12 @@ keyUsageLong = {
 }
 
 extendedKeyUsageLong = {
+    "anyExtendedKeyUsage": "Any Extended Key Usage",
+    "ipsecEndSystem": "IPSec End System",
+    "ipsecTunnel": "IPSec Tunnel",
+    "ipsecUser": "IPSec User",
+    "msSGC": "Microsoft Server Gated Crypto",
+    "nsSGC": "Netscape Server Gated Crypto",
     "serverAuth": "TLS Web Server Authentication",
     "clientAuth": "TLS Web Client Authentication",
     "codeSigning": "Code Signing",

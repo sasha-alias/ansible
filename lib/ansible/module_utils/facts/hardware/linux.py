@@ -193,7 +193,7 @@ class LinuxHardware(Hardware):
 
             # model name is for Intel arch, Processor (mind the uppercase P)
             # works for some ARM devices, like the Sheevaplug.
-            if key in ['model name', 'Processor', 'vendor_id', 'cpu', 'Vendor']:
+            if key in ['model name', 'Processor', 'vendor_id', 'cpu', 'Vendor', 'processor']:
                 if 'processor' not in cpu_facts:
                     cpu_facts['processor'] = []
                 cpu_facts['processor'].append(data[1].strip())
@@ -663,7 +663,7 @@ class LinuxHardware(Hardware):
         lvm_facts = {}
 
         if os.getuid() == 0 and self.module.get_bin_path('vgs'):
-            lvm_util_options = '--noheadings --nosuffix --units g'
+            lvm_util_options = '--noheadings --nosuffix --units g --separator ,'
 
             vgs_path = self.module.get_bin_path('vgs')
             # vgs fields: VG #PV #LV #SN Attr VSize VFree
@@ -671,7 +671,7 @@ class LinuxHardware(Hardware):
             if vgs_path:
                 rc, vg_lines, err = self.module.run_command('%s %s' % (vgs_path, lvm_util_options))
                 for vg_line in vg_lines.splitlines():
-                    items = vg_line.split()
+                    items = vg_line.split(',')
                     vgs[items[0]] = {'size_g': items[-2],
                                      'free_g': items[-1],
                                      'num_lvs': items[2],
@@ -684,7 +684,7 @@ class LinuxHardware(Hardware):
             if lvs_path:
                 rc, lv_lines, err = self.module.run_command('%s %s' % (lvs_path, lvm_util_options))
                 for lv_line in lv_lines.splitlines():
-                    items = lv_line.split()
+                    items = lv_line.split(',')
                     lvs[items[0]] = {'size_g': items[3], 'vg': items[1]}
 
             pvs_path = self.module.get_bin_path('pvs')
@@ -693,7 +693,7 @@ class LinuxHardware(Hardware):
             if pvs_path:
                 rc, pv_lines, err = self.module.run_command('%s %s' % (pvs_path, lvm_util_options))
                 for pv_line in pv_lines.splitlines():
-                    items = pv_line.split()
+                    items = pv_line.split(',')
                     pvs[self._find_mapper_device_name(items[0])] = {
                         'size_g': items[4],
                         'free_g': items[5],

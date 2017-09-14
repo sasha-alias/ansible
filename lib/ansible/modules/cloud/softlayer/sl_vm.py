@@ -6,7 +6,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -124,7 +124,7 @@ options:
       - Flag used to wait for active status before returning
     required: false
     default: true
-  wait_timeout:
+  wait_time:
     description:
       - time in seconds before wait returns
     required: false

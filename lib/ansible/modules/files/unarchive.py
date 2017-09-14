@@ -11,7 +11,7 @@
 from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'core'}
 
@@ -114,7 +114,7 @@ EXAMPLES = r'''
     remote_src: yes
 
 - name: Unarchive a file that needs to be downloaded (added in 2.0)
-- unarchive:
+  unarchive:
     src: https://example.com/example.zip
     dest: /usr/local/bin
     remote_src: yes
@@ -125,10 +125,12 @@ import codecs
 import datetime
 import grp
 import os
+import platform
 import pwd
 import re
 import stat
 import time
+import traceback
 from zipfile import ZipFile, BadZipfile
 
 from ansible.module_utils.basic import AnsibleModule
@@ -180,6 +182,7 @@ class ZipArchive(object):
         self.excludes = module.params['exclude']
         self.includes = []
         self.cmd_path = self.module.get_bin_path('unzip')
+        self.zipinfocmd_path = self.module.get_bin_path('zipinfo')
         self._files_in_archive = []
         self._infodict = dict()
 
@@ -261,7 +264,8 @@ class ZipArchive(object):
         return self._files_in_archive
 
     def is_unarchived(self):
-        cmd = [self.cmd_path, '-ZT', '-s', self.src]
+        # BSD unzip doesn't support zipinfo listings with timestamp.
+        cmd = [self.zipinfocmd_path, '-T', '-s', self.src]
         if self.excludes:
             cmd.extend(['-x', ] + self.excludes)
         rc, out, err = self.module.run_command(cmd)
@@ -277,6 +281,7 @@ class ZipArchive(object):
         # Get some information related to user/group ownership
         umask = os.umask(0)
         os.umask(umask)
+        systemtype = platform.system()
 
         # Get current user and group information
         groups = os.getgroups()
@@ -376,6 +381,12 @@ class ZipArchive(object):
                 ftype = 'f'
 
             # Some files may be storing FAT permissions, not Unix permissions
+            # For FAT permissions, we will use a base permissions set of 777 if the item is a directory or has the execute bit set.  Otherwise, 666.
+            #     This permission will then be modified by the system UMask.
+            # BSD always applies the Umask, even to Unix permissions.
+            # For Unix style permissions on Linux or Mac, we want to use them directly.
+            #     So we set the UMask for this file to zero.  That permission set will then be unchanged when calling _permstr_to_octal
+
             if len(permstr) == 6:
                 if path[-1] == '/':
                     permstr = 'rwxrwxrwx'
@@ -383,6 +394,11 @@ class ZipArchive(object):
                     permstr = 'rwxrwxrwx'
                 else:
                     permstr = 'rw-rw-rw-'
+                file_umask = umask
+            elif 'bsd' in systemtype.lower():
+                file_umask = umask
+            else:
+                file_umask = 0
 
             # Test string conformity
             if len(permstr) != 9 or not ZIP_FILE_MODE_RE.match(permstr):
@@ -479,12 +495,15 @@ class ZipArchive(object):
                         try:
                             mode = int(self.file_args['mode'], 8)
                         except Exception as e:
-                            self.module.fail_json(path=path, msg="mode %(mode)s must be in octal form" % self.file_args, details=to_native(e))
+                            try:
+                                mode = AnsibleModule._symbolic_mode_to_octal(st, self.file_args['mode'])
+                            except ValueError as e:
+                                self.module.fail_json(path=path, msg="%s" % to_native(e), exception=traceback.format_exc())
                 # Only special files require no umask-handling
                 elif ztype == '?':
                     mode = self._permstr_to_octal(permstr, 0)
                 else:
-                    mode = self._permstr_to_octal(permstr, umask)
+                    mode = self._permstr_to_octal(permstr, file_umask)
 
                 if mode != stat.S_IMODE(st.st_mode):
                     change = True

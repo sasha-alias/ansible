@@ -1,29 +1,17 @@
-# This file is part of Ansible,
-# (c) 2012-2017, Michael DeHaan <michael.dehaan@gmail.com>
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-#############################################
-'''
-DOCUMENTATION:
+# Copyright (c) 2017 Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
+DOCUMENTATION = '''
     name: virtualbox
     plugin_type: inventory
     short_description: virtualbox inventory source
     description:
         - Get inventory hosts from the local virtualbox installation.
         - Uses a <name>.vbox.yaml (or .vbox.yml) YAML configuration file.
+        - The inventory_hostname is always the 'Name' of the virtualbox instance.
     options:
         running_only:
             description: toggles showing all vms vs only those currently running
@@ -42,7 +30,13 @@ DOCUMENTATION:
             description: create vars from jinja2 expressions, these are created AFTER the query block
             type: dictionary
             default: {}
-EXAMPLES:
+        groups:
+            description: add hosts to group based on Jinja2 conditionals, these also run after query block
+            type: dictionary
+            default: {}
+'''
+
+EXAMPLES = '''
 # file must be named vbox.yaml or vbox.yml
 simple_config_file:
     plugin: virtualbox
@@ -52,15 +46,13 @@ simple_config_file:
     compose:
       ansible_connection: ('indows' in vbox_Guest_OS)|ternary('winrm', 'ssh')
 '''
-from __future__ import (absolute_import, division, print_function)
-__metaclass__ = type
 
 import os
 
 from subprocess import Popen, PIPE
 
 from ansible.errors import AnsibleParserError
-from ansible.module_utils._text import to_bytes
+from ansible.module_utils._text import to_bytes, to_text
 from ansible.plugins.inventory import BaseInventoryPlugin
 
 
@@ -94,13 +86,14 @@ class InventoryModule(BaseInventoryPlugin):
                     hostvars[host][varname] = self._query_vbox_data(host, data['query'][varname])
 
             # create composite vars
-            if data.get('compose') and isinstance(data['compose'], dict):
-                for varname in data['compose']:
-                    hostvars[host][varname] = self._compose(data['compose'][varname], hostvars[host])
+            self._set_composite_vars(data.get('compose'), hostvars, host)
 
             # actually update inventory
             for key in hostvars[host]:
                 self.inventory.set_variable(host, key, hostvars[host][key])
+
+            # constructed groups based on conditionals
+            self._add_host_to_composed_groups(data.get('groups'), hostvars, host)
 
     def _populate_from_source(self, source_data, config_data):
         hostvars = {}
@@ -209,6 +202,6 @@ class InventoryModule(BaseInventoryPlugin):
                 AnsibleParserError(e)
 
             source_data = p.stdout.readlines()
-            inventory.cache[cache_key] = source_data
+            inventory.cache[cache_key] = to_text(source_data)
 
         self._populate_from_source(source_data, config_data)

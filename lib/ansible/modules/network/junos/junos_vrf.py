@@ -8,9 +8,9 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'core'}
+                    'supported_by': 'network'}
 
 DOCUMENTATION = """
 ---
@@ -49,17 +49,17 @@ options:
     description:
       - It configures VRF target community configuration. The target value takes
         the form of C(target:A:B) where C(A) and C(B) are both numeric values.
+  table_label:
+    description:
+      - Causes JUNOS to allocate a VPN label per VRF rather than per VPN FEC.
+        This allows for forwarding of traffic to directly connected subnets, COS
+        Egress filtering etc.
   aggregate:
     description:
       - The set of VRF definition objects to be configured on the remote
         JUNOS device.  Ths list entries can either be the VRF name or a hash
         of VRF definitions and attributes.  This argument is mutually
         exclusive with the C(name) argument.
-  purge:
-    description:
-      - Instructs the module to consider the VRF definition absolute.
-        It will remove any previously configured VRFs on the device.
-    default: false
   state:
     description:
       - Configures the state of the VRF definition
@@ -78,7 +78,8 @@ requirements:
   - ncclient (>=v0.5.2)
 notes:
   - This module requires the netconf system service be enabled on
-    the remote device being managed
+    the remote device being managed.
+  - Tested against vSRX JUNOS version 15.1X49-D15.4, vqfx-10000 JUNOS Version 15.1X53-D60.4.
 """
 EXAMPLES = """
 - name: Configure vrf configuration
@@ -135,7 +136,6 @@ EXAMPLES = """
          - ge-0/0/2
       rd: 1.1.1.1:10
       target: target:65514:113
-      state: present
     - name: test-2
       description: test-vrf-2
       interfaces:
@@ -143,7 +143,7 @@ EXAMPLES = """
         - ge-0/0/5
       rd: 2.2.2.2:10
       target: target:65515:114
-      state: present
+  state: present
 """
 
 RETURN = """
@@ -164,9 +164,10 @@ diff.prepared:
 """
 import collections
 
-from copy import copy
+from copy import deepcopy
 
 from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils.network_common import remove_default_spec
 from ansible.module_utils.junos import junos_argument_spec, check_args
 from ansible.module_utils.junos import load_config, map_params_to_obj, map_obj_to_ele, to_param_list
 from ansible.module_utils.junos import commit_configuration, discard_changes, locked_config
@@ -189,28 +190,25 @@ def main():
         interfaces=dict(type='list'),
         target=dict(type='list'),
         state=dict(default='present', choices=['present', 'absent']),
-        active=dict(default=True, type='bool')
+        active=dict(default=True, type='bool'),
+        table_label=dict(default=True, type='bool')
     )
 
-    aggregate_spec = copy(element_spec)
+    aggregate_spec = deepcopy(element_spec)
     aggregate_spec['name'] = dict(required=True)
+
+    # remove default in aggregate spec, to handle common arguments
+    remove_default_spec(aggregate_spec)
 
     argument_spec = dict(
         aggregate=dict(type='list', elements='dict', options=aggregate_spec),
-        purge=dict(default=False, type='bool')
     )
 
     argument_spec.update(element_spec)
     argument_spec.update(junos_argument_spec)
 
     required_one_of = [['aggregate', 'name']]
-    mutually_exclusive = [['aggregate', 'name'],
-                          ['aggregate', 'description'],
-                          ['aggregate', 'rd'],
-                          ['aggregate', 'interfaces'],
-                          ['aggregate', 'target'],
-                          ['aggregate', 'state'],
-                          ['aggregate', 'active']]
+    mutually_exclusive = [['aggregate', 'name']]
 
     module = AnsibleModule(argument_spec=argument_spec,
                            supports_check_mode=True,
@@ -235,14 +233,19 @@ def main():
         ('rd', 'route-distinguisher/rd-type'),
         ('interfaces', 'interface/name'),
         ('target', 'vrf-target/community'),
+        ('table_label', {'xpath': 'vrf-table-label', 'tag_only': True}),
     ])
 
     params = to_param_list(module)
     requests = list()
 
     for param in params:
-        item = copy(param)
+        # if key doesn't exist in the item, get it from module.params
+        for key in param:
+            if param.get(key) is None:
+                param[key] = module.params[key]
 
+        item = param.copy()
         item['type'] = 'vrf'
 
         want = map_params_to_obj(module, param_to_xpath_map, param=item)
@@ -250,7 +253,7 @@ def main():
 
     with locked_config(module):
         for req in requests:
-            diff = load_config(module, tostring(req), warnings, action='replace')
+            diff = load_config(module, tostring(req), warnings, action='merge')
 
         commit = not module.check_mode
         if diff:

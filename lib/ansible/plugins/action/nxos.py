@@ -24,9 +24,8 @@ import copy
 
 from ansible import constants as C
 from ansible.plugins.action.normal import ActionModule as _ActionModule
-from ansible.module_utils.basic import AnsibleFallbackNotFound
-from ansible.module_utils.nxos import nxos_argument_spec
-from ansible.module_utils.six import iteritems
+from ansible.module_utils.network_common import load_provider
+from ansible.module_utils.nxos import nxos_provider_spec
 
 try:
     from __main__ import display
@@ -38,15 +37,15 @@ except ImportError:
 class ActionModule(_ActionModule):
 
     def run(self, tmp=None, task_vars=None):
-        if self._play_context.connection != 'local':
+        provider = load_provider(nxos_provider_spec, self._task.args)
+        transport = provider['transport'] or 'cli'
+
+        if self._play_context.connection != 'local' and transport == 'cli':
             return dict(
                 failed=True,
                 msg='invalid connection specified, expected connection=local, '
                     'got %s' % self._play_context.connection
             )
-
-        provider = self.load_provider()
-        transport = provider['transport'] or 'cli'
 
         display.vvvv('connection transport is %s' % transport, self._play_context.remote_addr)
 
@@ -55,18 +54,11 @@ class ActionModule(_ActionModule):
             pc.connection = 'network_cli'
             pc.network_os = 'nxos'
             pc.remote_addr = provider['host'] or self._play_context.remote_addr
-            pc.port = provider['port'] or self._play_context.port or 22
+            pc.port = int(provider['port'] or self._play_context.port or 22)
             pc.remote_user = provider['username'] or self._play_context.connection_user
             pc.password = provider['password'] or self._play_context.password
             pc.private_key_file = provider['ssh_keyfile'] or self._play_context.private_key_file
-            pc.timeout = provider['timeout'] or C.PERSISTENT_COMMAND_TIMEOUT
-            self._task.args['provider'] = provider.update(
-                host=pc.remote_addr,
-                port=pc.port,
-                username=pc.remote_user,
-                password=pc.password,
-                ssh_keyfile=pc.private_key_file
-            )
+            pc.timeout = int(provider['timeout'] or C.PERSISTENT_COMMAND_TIMEOUT)
             display.vvv('using connection plugin %s' % pc.connection, pc.remote_addr)
             connection = self._shared_loader_obj.connection_loader.get('persistent', pc, sys.stdin)
 
@@ -93,10 +85,13 @@ class ActionModule(_ActionModule):
                 provider['host'] = self._play_context.remote_addr
 
             if provider.get('port') is None:
-                provider['port'] = 80
+                if provider.get('use_ssl'):
+                    provider['port'] = 443
+                else:
+                    provider['port'] = 80
 
             if provider.get('timeout') is None:
-                provider['timeout'] = self._play_context.timeout
+                provider['timeout'] = C.PERSISTENT_COMMAND_TIMEOUT
 
             if provider.get('username') is None:
                 provider['username'] = self._play_context.connection_user
@@ -117,30 +112,3 @@ class ActionModule(_ActionModule):
 
         result = super(ActionModule, self).run(tmp, task_vars)
         return result
-
-    def load_provider(self):
-        provider = self._task.args.get('provider', {})
-        for key, value in iteritems(nxos_argument_spec):
-            if key != 'provider' and key not in provider:
-                if key in self._task.args:
-                    provider[key] = self._task.args[key]
-                elif 'fallback' in value:
-                    provider[key] = self._fallback(value['fallback'])
-                elif key not in provider:
-                    provider[key] = None
-        return provider
-
-    def _fallback(self, fallback):
-        strategy = fallback[0]
-        args = []
-        kwargs = {}
-
-        for item in fallback[1:]:
-            if isinstance(item, dict):
-                kwargs = item
-            else:
-                args = item
-        try:
-            return strategy(*args, **kwargs)
-        except AnsibleFallbackNotFound:
-            pass

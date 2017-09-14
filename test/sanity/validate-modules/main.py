@@ -41,7 +41,7 @@ from ansible.utils.plugin_docs import BLACKLIST, get_docstring
 
 from module_args import get_argument_spec
 
-from schema import doc_schema, metadata_schema, return_schema
+from schema import doc_schema, metadata_1_1_schema, return_schema
 
 from utils import CaptureStd, parse_yaml
 from voluptuous.humanize import humanize_error
@@ -802,7 +802,14 @@ class ModuleValidator(Validator):
                             msg='Module deprecated, but DOCUMENTATION.deprecated is missing'
                         )
 
-                self._validate_docs_schema(doc, doc_schema(self.object_name.split('.')[0]), 'DOCUMENTATION', 305)
+                if os.path.islink(self.object_path):
+                    # This module has an alias, which we can tell as it's a symlink
+                    # Rather than checking for `module: $filename` we need to check against the true filename
+                    self._validate_docs_schema(doc, doc_schema(os.readlink(self.object_path).split('.')[0]), 'DOCUMENTATION', 305)
+                else:
+                    # This is the normal case
+                    self._validate_docs_schema(doc, doc_schema(self.object_name.split('.')[0]), 'DOCUMENTATION', 305)
+
                 self._check_version_added(doc)
                 self._check_for_new_args(doc)
 
@@ -892,7 +899,7 @@ class ModuleValidator(Validator):
                     )
 
             if metadata:
-                self._validate_docs_schema(metadata, metadata_schema(deprecated),
+                self._validate_docs_schema(metadata, metadata_1_1_schema(deprecated),
                                            'ANSIBLE_METADATA', 316)
 
         return doc_info

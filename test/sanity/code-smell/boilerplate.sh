@@ -3,7 +3,7 @@
 metaclass1=$(find ./bin -type f -exec grep -HL '__metaclass__ = type' '{}' '+')
 future1=$(find ./bin -type f -exec grep -HL 'from __future__ import (absolute_import, division, print_function)' '{}' '+')
 
-# We eventually want to remove the module_utils and modules pruning from metaclass2 and future2
+# We eventually want to remove the module_utils pruning from metaclass2 and future2
 metaclass2=$(find ./lib/ansible -path ./lib/ansible/modules -prune \
         -o -path ./lib/ansible/module_utils -prune \
         -o -path ./lib/ansible/module_utils/six/_six.py -prune \
@@ -24,7 +24,6 @@ metaclass3=$(find ./lib/ansible/modules -path ./lib/ansible/modules/windows -pru
         -o -path ./lib/ansible/modules/cloud/openstack -prune \
         -o -path ./lib/ansible/modules/cloud/cloudstack -prune \
         -o -path ./lib/ansible/modules/cloud/amazon -prune \
-        -o -path ./lib/ansible/modules/monitoring -prune \
         -o -path ./lib/ansible/modules/network/aos -prune \
         -o -path ./lib/ansible/modules/network/avi -prune \
         -o -path ./lib/ansible/modules/network/cloudengine -prune \
@@ -44,7 +43,6 @@ future3=$(find ./lib/ansible/modules -path ./lib/ansible/modules/windows -prune 
         -o -path ./lib/ansible/modules/cloud/openstack -prune \
         -o -path ./lib/ansible/modules/cloud/cloudstack -prune \
         -o -path ./lib/ansible/modules/cloud/amazon -prune \
-        -o -path ./lib/ansible/modules/monitoring -prune \
         -o -path ./lib/ansible/modules/network/aos -prune \
         -o -path ./lib/ansible/modules/network/avi -prune \
         -o -path ./lib/ansible/modules/network/cloudengine -prune \

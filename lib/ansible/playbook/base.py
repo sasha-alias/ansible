@@ -31,7 +31,7 @@ from ansible import constants as C
 from ansible.module_utils.six import iteritems, string_types, with_metaclass
 from ansible.module_utils.parsing.convert_bool import boolean
 from ansible.errors import AnsibleParserError, AnsibleUndefinedVariable
-from ansible.module_utils._text import to_text
+from ansible.module_utils._text import to_text, to_native
 from ansible.playbook.attribute import Attribute, FieldAttribute
 from ansible.parsing.dataloader import DataLoader
 from ansible.utils.vars import combine_vars, isidentifier, get_unique_id
@@ -164,6 +164,7 @@ class Base(with_metaclass(BaseMeta, object)):
     _run_once            = FieldAttribute(isa='bool')
     _ignore_errors       = FieldAttribute(isa='bool')
     _check_mode          = FieldAttribute(isa='bool')
+    _diff                = FieldAttribute(isa='bool')
     _any_errors_fatal     = FieldAttribute(isa='bool', default=C.ANY_ERRORS_FATAL, always_post_validate=True)
 
     # param names which have been deprecated/removed
@@ -197,9 +198,10 @@ class Base(with_metaclass(BaseMeta, object)):
         self.vars = dict()
 
     def dump_me(self, depth=0):
+        ''' this is never called from production code, it is here to be used when debugging as a 'complex print' '''
         if depth == 0:
-            print("DUMPING OBJECT ------------------------------------------------------")
-        print("%s- %s (%s, id=%s)" % (" " * depth, self.__class__.__name__, self, id(self)))
+            display.debug("DUMPING OBJECT ------------------------------------------------------")
+        display.debug("%s- %s (%s, id=%s)" % (" " * depth, self.__class__.__name__, self, id(self)))
         if hasattr(self, '_parent') and self._parent:
             self._parent.dump_me(depth + 2)
             dep_chain = self._parent.get_dep_chain()
@@ -282,8 +284,9 @@ class Base(with_metaclass(BaseMeta, object)):
             if key not in valid_attrs:
                 raise AnsibleParserError("'%s' is not a valid attribute for a %s" % (key, self.__class__.__name__), obj=ds)
 
-    def validate(self, all_vars=dict()):
+    def validate(self, all_vars=None):
         ''' validation that is done at parse time, not load time '''
+        all_vars = {} if all_vars is None else all_vars
 
         if not self._validated:
             # walk all fields in the object
@@ -439,14 +442,16 @@ class Base(with_metaclass(BaseMeta, object)):
 
                 # and assign the massaged value back to the attribute field
                 setattr(self, name, value)
-
             except (TypeError, ValueError) as e:
                 raise AnsibleParserError("the field '%s' has an invalid value (%s), and could not be converted to an %s."
                                          "The error was: %s" % (name, value, attribute.isa, e), obj=self.get_ds(), orig_exc=e)
             except (AnsibleUndefinedVariable, UndefinedError) as e:
                 if templar._fail_on_undefined_errors and name != 'name':
-                    raise AnsibleParserError("the field '%s' has an invalid value, which appears to include a variable that is undefined."
-                                             "The error was: %s" % (name, e), obj=self.get_ds(), orig_exc=e)
+                    if name == 'args':
+                        msg= "The task includes an option with an undefined variable. The error was: %s" % (to_native(e))
+                    else:
+                        msg= "The field '%s' has an invalid value, which includes an undefined variable. The error was: %s" % (name, to_native(e))
+                    raise AnsibleParserError(msg, obj=self.get_ds(), orig_exc=e)
 
         self._finalized = True
 

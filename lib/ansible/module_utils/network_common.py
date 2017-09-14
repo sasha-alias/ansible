@@ -91,7 +91,9 @@ class Entity(object):
         * default - default value
     """
 
-    def __init__(self, module, attrs=None, args=[], keys=None, from_argspec=False):
+    def __init__(self, module, attrs=None, args=None, keys=None, from_argspec=False):
+        args = [] if args is None else args
+
         self._attributes = attrs or {}
         self._module = module
 
@@ -329,6 +331,44 @@ def ternary(value, true_val, false_val):
         return false_val
 
 
+def remove_default_spec(spec):
+    for item in spec:
+        if 'default' in spec[item]:
+            del spec[item]['default']
+
+
+def load_provider(spec, args):
+    provider = args.get('provider', {})
+    for key, value in iteritems(spec):
+        if key not in provider:
+            if key in args:
+                provider[key] = args[key]
+            elif 'fallback' in value:
+                provider[key] = _fallback(value['fallback'])
+            elif 'default' in value:
+                provider[key] = value['default']
+            else:
+                provider[key] = None
+    args['provider'] = provider
+    return provider
+
+
+def _fallback(fallback):
+    strategy = fallback[0]
+    args = []
+    kwargs = {}
+
+    for item in fallback[1:]:
+        if isinstance(item, dict):
+            kwargs = item
+        else:
+            args = item
+    try:
+        return strategy(*args, **kwargs)
+    except AnsibleFallbackNotFound:
+        pass
+
+
 class Template:
 
     def __init__(self):
@@ -339,17 +379,22 @@ class Template:
         self.env = Environment()
         self.env.filters.update({'ternary': ternary})
 
-    def __call__(self, value, variables=None):
+    def __call__(self, value, variables=None, fail_on_undefined=True):
         variables = variables or {}
         if not self.contains_vars(value):
             return value
 
-        value = self.env.from_string(value).render(variables)
+        try:
+            value = self.env.from_string(value).render(variables)
+        except UndefinedError:
+            if not fail_on_undefined:
+                return None
+            raise
 
         if value:
             try:
                 return ast.literal_eval(value)
-            except ValueError:
+            except:
                 return str(value)
         else:
             return None

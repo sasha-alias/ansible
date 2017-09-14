@@ -16,9 +16,9 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
-                    'supported_by': 'community'}
+                    'supported_by': 'network'}
 
 
 DOCUMENTATION = """
@@ -209,7 +209,7 @@ class FactsBase(object):
 
 class Default(FactsBase):
 
-    VERSION_MAP = frozenset([
+    VERSION_MAP_7K = frozenset([
         ('sys_ver_str', 'version'),
         ('proc_board_id', 'serialnum'),
         ('chassis_id', 'model'),
@@ -217,10 +217,21 @@ class Default(FactsBase):
         ('host_name', 'hostname')
     ])
 
+    VERSION_MAP = frozenset([
+        ('kickstart_ver_str', 'version'),
+        ('proc_board_id', 'serialnum'),
+        ('chassis_id', 'model'),
+        ('kick_file_name', 'image'),
+        ('host_name', 'hostname')
+    ])
+
     def populate(self):
         data = self.run('show version', 'json')
         if data:
-            self.facts.update(self.transform_dict(data, self.VERSION_MAP))
+            if data.get('sys_ver_str'):
+                self.facts.update(self.transform_dict(data, self.VERSION_MAP_7K))
+            else:
+                self.facts.update(self.transform_dict(data, self.VERSION_MAP))
 
 
 class Config(FactsBase):
@@ -431,7 +442,10 @@ class Legacy(FactsBase):
         return objects
 
     def parse_power_supply_info(self, data):
-        data = data['powersup']['TABLE_psinfo']['ROW_psinfo']
+        if data.get('powersup').get('TABLE_psinfo_n3k'):
+            data = data['powersup']['TABLE_psinfo_n3k']['ROW_psinfo_n3k']
+        else:
+            data = data['powersup']['TABLE_psinfo']['ROW_psinfo']
         objects = list(self.transform_iterable(data, self.POWERSUP_MAP))
         return objects
 

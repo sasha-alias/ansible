@@ -33,38 +33,39 @@ from ansible.module_utils.connection import exec_command
 
 _DEVICE_CONFIGS = {}
 
-iosxr_argument_spec = {
+iosxr_provider_spec = {
     'host': dict(),
     'port': dict(type='int'),
     'username': dict(fallback=(env_fallback, ['ANSIBLE_NET_USERNAME'])),
     'password': dict(fallback=(env_fallback, ['ANSIBLE_NET_PASSWORD']), no_log=True),
     'ssh_keyfile': dict(fallback=(env_fallback, ['ANSIBLE_NET_SSH_KEYFILE']), type='path'),
     'timeout': dict(type='int'),
-    'provider': dict(type='dict')
 }
+iosxr_argument_spec = {
+    'provider': dict(type='dict', options=iosxr_provider_spec)
+}
+iosxr_top_spec = {
+    'host': dict(removed_in_version=2.3),
+    'port': dict(removed_in_version=2.3, type='int'),
+    'username': dict(removed_in_version=2.3),
+    'password': dict(removed_in_version=2.3, no_log=True),
+    'ssh_keyfile': dict(removed_in_version=2.3, type='path'),
+    'timeout': dict(removed_in_version=2.3, type='int'),
+}
+iosxr_argument_spec.update(iosxr_top_spec)
 
 
-def get_argspec():
-    return iosxr_argument_spec
+def get_provider_argspec():
+    return iosxr_provider_spec
 
 
 def check_args(module, warnings):
-    provider = module.params['provider'] or {}
-    for key in iosxr_argument_spec:
-        if module._name == 'iosxr_user':
-            if key not in ['password', 'provider'] and module.params[key]:
-                warnings.append('argument %s has been deprecated and will be in a future version' % key)
-        else:
-            if key != 'provider' and module.params[key]:
-                warnings.append('argument %s has been deprecated and will be removed in a future version' % key)
-
-    if provider:
-        for param in ('password',):
-            if provider.get(param):
-                module.no_log_values.update(return_values(provider[param]))
+    pass
 
 
-def get_config(module, flags=[]):
+def get_config(module, flags=None):
+    flags = [] if flags is None else flags
+
     cmd = 'show running-config '
     cmd += ' '.join(flags)
     cmd = cmd.strip()
@@ -139,7 +140,6 @@ def load_config(module, commands, warnings, commit=False, replace=False, comment
             cmd += ' comment {0}'.format(comment)
     else:
         cmd = 'abort'
-        diff = None
 
     rc, out, err = exec_command(module, cmd)
     if rc != 0:

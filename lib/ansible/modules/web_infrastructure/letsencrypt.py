@@ -8,7 +8,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -43,7 +43,7 @@ requirements:
 options:
   account_key:
     description:
-      - "File containing the the Let's Encrypt account RSA key."
+      - "File containing the Let's Encrypt account RSA key."
       - "Can be created with C(openssl rsa ...)."
     required: true
   account_email:
@@ -159,7 +159,6 @@ import binascii
 import copy
 import hashlib
 import json
-import locale
 import os
 import re
 import shutil
@@ -215,12 +214,12 @@ def get_cert_days(module, cert_file):
     _, out, _ = module.run_command(openssl_cert_cmd, check_rc=True)
     try:
         not_after_str = re.search(r"\s+Not After\s*:\s+(.*)", out.decode('utf8')).group(1)
-        not_after = datetime.datetime.fromtimestamp(time.mktime(time.strptime(not_after_str, '%b %d %H:%M:%S %Y %Z')))
+        not_after = datetime.fromtimestamp(time.mktime(time.strptime(not_after_str, '%b %d %H:%M:%S %Y %Z')))
     except AttributeError:
         module.fail_json(msg="No 'Not after' date found in {0}".format(cert_file))
     except ValueError:
         module.fail_json(msg="Failed to parse 'Not after' date of {0}".format(cert_file))
-    now = datetime.datetime.utcnow()
+    now = datetime.utcnow()
     return (not_after - now).days
 
 
@@ -408,13 +407,15 @@ class ACMEAccount(object):
 
         return result, info
 
-    def _new_reg(self, contact=[]):
+    def _new_reg(self, contact=None):
         '''
         Registers a new ACME account. Returns True if the account was
         created and False if it already existed (e.g. it was not newly
         created)
         https://tools.ietf.org/html/draft-ietf-acme-acme-02#section-6.3
         '''
+        contact = [] if contact is None else contact
+
         if self.uri is not None:
             return True
 
@@ -789,7 +790,7 @@ def main():
     )
 
     # AnsibleModule() changes the locale, so change it back to C because we rely on time.strptime() when parsing certificate dates.
-    locale.setlocale(locale.LC_ALL, "C")
+    module.run_command_environ_update = dict(LANG='C', LC_ALL='C', LC_MESSAGES='C', LC_CTYPE='C')
 
     cert_days = get_cert_days(module, module.params['dest'])
     if cert_days < module.params['remaining_days']:

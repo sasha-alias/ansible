@@ -31,7 +31,7 @@ import time
 from ansible.cli import CLI
 from ansible.errors import AnsibleOptionsError
 from ansible.module_utils._text import to_native
-from ansible.plugins import module_loader
+from ansible.plugins.loader import module_loader
 from ansible.utils.cmd_functions import run_cmd
 
 try:
@@ -107,6 +107,8 @@ class PullCLI(CLI):
                                help='modified files in the working repository will be discarded')
         self.parser.add_option('--track-subs', dest='tracksubs', default=False, action='store_true',
                                help='submodules will track the latest changes. This is equivalent to specifying the --remote flag to git submodule update')
+        self.parser.add_option("--check", default=False, dest='check', action='store_true',
+                               help="don't make any changes; instead, try to predict some of the changes that may occur")
 
         # for pull we don't want a default
         self.parser.set_defaults(inventory=None)
@@ -243,6 +245,8 @@ class PullCLI(CLI):
             cmd += ' -l "%s"' % self.options.subset
         else:
             cmd += ' -l "%s"' % limit_opts
+        if self.options.check:
+            cmd += ' -C'
 
         os.chdir(self.options.dest)
 

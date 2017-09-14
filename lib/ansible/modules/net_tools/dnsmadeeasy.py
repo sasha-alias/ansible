@@ -6,7 +6,7 @@ from __future__ import absolute_import, division, print_function
 __metaclass__ = type
 
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -471,12 +471,12 @@ class DME2(object):
         if not self.all_records:
             self.all_records = self.getRecords()
 
-        if record_type in ["A", "AAAA", "CNAME", "ANAME", "HTTPRED", "PTR"]:
+        if record_type in ["CNAME", "ANAME", "HTTPRED", "PTR"]:
             for result in self.all_records:
                 if result['name'] == record_name and result['type'] == record_type:
                     return result
             return False
-        elif record_type in ["MX", "NS", "TXT", "SRV"]:
+        elif record_type in ["A", "AAAA", "MX", "NS", "TXT", "SRV"]:
             for result in self.all_records:
                 if record_type == "MX":
                     value = record_value.split(" ")[1]
