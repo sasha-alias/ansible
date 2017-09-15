@@ -71,6 +71,12 @@ options:
         description:
             - The passphrase for the I(privatekey_path).
 
+    selfsigned_version:
+        default: 3
+        description:
+            - Version of the C(selfsigned) certificate. Nowadays it should almost always be C(3).
+        version_added: "2.5"
+
     selfsigned_digest:
         default: "sha256"
         description:
@@ -374,6 +380,7 @@ class SelfSignedCertificate(Certificate):
         self.notBefore = module.params['selfsigned_notBefore']
         self.notAfter = module.params['selfsigned_notAfter']
         self.digest = module.params['selfsigned_digest']
+        self.version = module.params['selfsigned_version']
         self.csr = crypto_utils.load_certificate_request(self.csr_path)
         self.privatekey = crypto_utils.load_privatekey(
             self.privatekey_path, self.privatekey_passphrase
@@ -406,7 +413,7 @@ class SelfSignedCertificate(Certificate):
                 # 10 years. 315360000 is 10 years in seconds.
                 cert.gmtime_adj_notAfter(315360000)
             cert.set_subject(self.csr.get_subject())
-            cert.set_version(self.csr.get_version() - 1)
+            cert.set_version(self.version - 1)
             cert.set_pubkey(self.csr.get_pubkey())
             cert.add_extensions(self.csr.get_extensions())
 
@@ -531,9 +538,10 @@ class AssertOnlyCertificate(Certificate):
                 for extension_idx in range(0, self.cert.get_extension_count()):
                     extension = self.cert.get_extension(extension_idx)
                     if extension.get_short_name() == 'keyUsage':
-                        keyUsage = [crypto_utils.keyUsageLong.get(keyUsage, keyUsage) for keyUsage in self.keyUsage]
-                        if (not self.keyUsage_strict and not all(x in str(extension).split(', ') for x in keyUsage)) or \
-                           (self.keyUsage_strict and not set(keyUsage) == set(str(extension).split(', '))):
+                        keyUsage = [OpenSSL._util.lib.OBJ_txt2nid(keyUsage) for keyUsage in self.keyUsage]
+                        current_ku = [OpenSSL._util.lib.OBJ_txt2nid(usage.strip()) for usage in str(extension).split(',')]
+                        if (not self.keyUsage_strict and not all(x in current_ku for x in keyUsage)) or \
+                           (self.keyUsage_strict and not set(keyUsage) == set(current_ku)):
                             self.message.append(
                                 'Invalid keyUsage component (got %s, expected all of %s to be present)' % (str(extension).split(', '), keyUsage)
                             )
@@ -543,9 +551,10 @@ class AssertOnlyCertificate(Certificate):
                 for extension_idx in range(0, self.cert.get_extension_count()):
                     extension = self.cert.get_extension(extension_idx)
                     if extension.get_short_name() == 'extendedKeyUsage':
-                        extKeyUsage = [crypto_utils.extendedKeyUsageLong.get(keyUsage, keyUsage) for keyUsage in self.extendedKeyUsage]
-                        if (not self.extendedKeyUsage_strict and not all(x in str(extension).split(', ') for x in extKeyUsage)) or \
-                           (self.extendedKeyUsage_strict and not set(extKeyUsage) == set(str(extension).split(', '))):
+                        extKeyUsage = [OpenSSL._util.lib.OBJ_txt2nid(keyUsage) for keyUsage in self.extendedKeyUsage]
+                        current_xku = [OpenSSL._util.lib.OBJ_txt2nid(usage.strip()) for usage in str(extension).split(',')]
+                        if (not self.extendedKeyUsage_strict and not all(x in current_xku for x in extKeyUsage)) or \
+                           (self.extendedKeyUsage_strict and not set(extKeyUsage) == set(current_xku)):
                             self.message.append(
                                 'Invalid extendedKeyUsage component (got %s, expected all of %s to be present)' % (str(extension).split(', '), extKeyUsage)
                             )
@@ -740,6 +749,7 @@ def main():
             valid_in=dict(type='int'),
 
             # provider: selfsigned
+            selfsigned_version=dict(type='int', default='3'),
             selfsigned_digest=dict(type='str', default='sha256'),
             selfsigned_notBefore=dict(type='str', aliases=['selfsigned_not_before']),
             selfsigned_notAfter=dict(type='str', aliases=['selfsigned_not_after']),
